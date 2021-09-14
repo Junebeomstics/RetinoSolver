@@ -7,19 +7,20 @@ import sys
 
 sys.path.append('../..')
 
-from dataset.HCP_3sets_ROI_rotated import Retinotopy
+from Retinotopy.dataset.HCP_3sets_ROI_splitHalves import Retinotopy
 from torch_geometric.data import DataLoader
 from torch_geometric.nn import SplineConv
 
-path = osp.join(osp.dirname(osp.realpath(__file__)), 'data')
+path = osp.join(osp.dirname(osp.realpath(__file__)), '../Retinotopy', 'data')
 pre_transform = T.Compose([T.FaceToEdge()])
 
+fit = '3'  # or '2'
 hemisphere = 'Left'
 # Loading test dataset
 test_dataset = Retinotopy(path, 'Test', transform=T.Cartesian(),
                           pre_transform=pre_transform, n_examples=181,
                           prediction='polarAngle', myelination=True,
-                          hemisphere=hemisphere)
+                          hemisphere=hemisphere, fit=fit)
 test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
 
@@ -116,11 +117,11 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = Net().to(device)
 # Loading trained model
 model.load_state_dict(torch.load(
-    './polarAngle/output/deepRetinotopy_PA_LH_model.pt',
+    './output/deepRetinotopy_PA_LH_model.pt',
     map_location='cpu'))  # Left hemisphere
 
 # Create an output folder if it doesn't already exist
-directory = './testset_results/left_hemi'
+directory = './../Manuscript/testset_results/left_hemi'
 if not osp.exists(directory):
     os.makedirs(directory)
 
@@ -131,7 +132,6 @@ def test():
 
     y = []
     y_hat = []
-
     for data in test_loader:
         pred = model(data.to(device)).detach()
 
@@ -146,4 +146,5 @@ evaluation = test()
 torch.save({'Predicted_values': evaluation['Predicted_values'],
             'Measured_values': evaluation['Measured_values']},
            osp.join(directory,
-                    'testset-rotatedROI_deepRetinotopy_PA_LH.pt'))
+                    'testset-pred_deepRetinotopy_PA_LH_fit' + str(
+                        fit) + '.pt'))

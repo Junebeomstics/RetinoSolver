@@ -7,18 +7,18 @@ import sys
 
 sys.path.append('../..')
 
-from dataset.HCP_3sets_ROI import Retinotopy
+from Retinotopy.dataset.HCP_3sets_ROI_notwin import Retinotopy
 from torch_geometric.data import DataLoader
 from torch_geometric.nn import SplineConv
 
-path = osp.join(osp.dirname(osp.realpath(__file__)), 'data')
+path = osp.join(osp.dirname(osp.realpath(__file__)), '../Retinotopy', 'data')
 pre_transform = T.Compose([T.FaceToEdge()])
 
-hemisphere = 'Left'  # or 'Right'
+hemisphere = 'Left'
 # Loading test dataset
 test_dataset = Retinotopy(path, 'Test', transform=T.Cartesian(),
                           pre_transform=pre_transform, n_examples=181,
-                          prediction='eccentricity', myelination=True,
+                          prediction='polarAngle', myelination=True,
                           hemisphere=hemisphere)
 test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
@@ -115,28 +115,18 @@ class Net(torch.nn.Module):
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = Net().to(device)
 
-if hemisphere == 'Left':
-    model.load_state_dict(torch.load(
-        './eccentricity/output/deepRetinotopy_ecc_LH_model.pt',
-        map_location='cpu'))  # Left hemisphere
-else:
-    model.load_state_dict(torch.load(
-        './eccentricity/output/deepRetinotopy_ecc_RH_model.pt',
-        map_location='cpu'))  # Right hemisphere
+# Loading trained model
+model.load_state_dict(torch.load(
+    './output/deepRetinotopy_PA_LH_noTwin_model.pt',
+    map_location='cpu'))  # Left hemisphere
 
 # Create an output folder if it doesn't already exist
-if hemisphere == 'Left':
-    directory = './testset_results/left_hemi'
-else:
-    directory = './testset_results/right_hemi'
+directory = './../Manuscript/testset_results/left_hemi'
 if not osp.exists(directory):
     os.makedirs(directory)
 
+
 # Evaluating trained model on the test dataset
-if hemisphere == 'Left':
-    hemi = 'LH'
-else:
-    hemi = 'RH'
 def test():
     model.eval()
 
@@ -157,67 +147,4 @@ evaluation = test()
 torch.save({'Predicted_values': evaluation['Predicted_values'],
             'Measured_values': evaluation['Measured_values']},
            osp.join(directory,
-                    'testset-pred_deepRetinotopy_ecc_' + str(hemi) + '.pt'))
-
-
-# Evaluating trained model on the test dataset (shuffled curvature/myelin
-# values)
-def test():
-    model.eval()
-
-    y = []
-    y_hat = []
-    myelin = []
-    curv = []
-    for data in test_loader:
-        # Shuffling myelin and curv
-        data.x = data.x[torch.randperm(3267)]
-
-        myelin.append(data.x.transpose(0, 1)[1])
-        curv.append(data.x.transpose(0, 1)[0])
-
-        pred = model(data.to(device)).detach()
-
-        y_hat.append(pred)
-        y.append(data.to(device).y.view(-1))
-
-    output = {'Predicted_values': y_hat, 'Measured_values': y,
-              'Shuffled_myelin': myelin, 'Shuffled_curv': curv}
-    return output
-
-
-evaluation = test()
-torch.save({'Predicted_values': evaluation['Predicted_values'],
-            'Measured_values': evaluation['Measured_values'],
-            'Shuffled_myelin': evaluation['Shuffled_myelin'],
-            'Shuffled_curv': evaluation['Shuffled_curv']},
-           osp.join(directory,
-                    'testset-shuffled-myelincurv_deepRetinotopy_ecc_' + str(
-                        hemi) + '.pt'))
-
-
-# Evaluating trained model on the test dataset (constant curvature/myelin
-# values)
-def test():
-    model.eval()
-
-    y = []
-    y_hat = []
-    for data in test_loader:
-        data.x.transpose(0, 1)[0] = 0.027303819
-        data.x.transpose(0, 1)[1] = 1.4386905
-
-        pred = model(data.to(device)).detach()
-
-        y_hat.append(pred)
-        y.append(data.to(device).y.view(-1))
-    output = {'Predicted_values': y_hat, 'Measured_values': y}
-    return output
-
-
-evaluation = test()
-torch.save({'Predicted_values': evaluation['Predicted_values'],
-            'Measured_values': evaluation['Measured_values']},
-           osp.join(directory,
-                    'testset-constant_deepRetinotopy_ecc_' + str(
-                        hemi) + '.pt'))
+                    'testset-pred_deepRetinotopy_PA_LH_notwin.pt'))
