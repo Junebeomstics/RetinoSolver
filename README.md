@@ -49,9 +49,9 @@ The image is ready to use. The experiment scripts will automatically use this im
 
 This repository provides a unified training script (`Models/train_unified.py`) that supports multiple model architectures:
 - `baseline`: Original SplineConv-based model
-- `transolver_optionA`: Transolver with Physics Attention (without edge information)
-- `transolver_optionB`: Transolver with Physics Attention (with encoded edge information)
-- `transolver_optionC`: Transolver with full Physics Attention architecture (matching original Transolver experiments)
+- `transolver_optionA`: Hybrid Transolver with SplineConv & Physics Attention (without edge information)
+- `transolver_optionB`: Hybrid Transolver with SplineConv & Physics Attention (with encoded edge information)
+- `transolver_optionC`: Original Transolver with full Physics Attention architecture 
 
 ### Running All Experiments (Recommended)
 
@@ -184,16 +184,16 @@ For more detailed information, see [Models/README_unified_training.md](Models/RE
 Results are saved in the following structure:
 ```
 Models/output/
-├── baseline_ecc_Left/
-│   ├── baseline_ecc_Left_output_epoch25.pt
-│   ├── baseline_ecc_Left_output_epoch50.pt
+├── RET-XXX
+│   ├── baseline_ecc_Left_best_model_epoch25.pt
+│   ├── baseline_ecc_Left_final_model.pt
 │   └── ...
-├── baseline_ecc_Right/
-├── transolver_optionA_ecc_Left/
+├── RET-XXX
+├── RET-XXX
 └── ...
 ```
 
-Each experiment creates a folder named `{model_type}_{prediction}_{hemisphere}`.
+Each experiment creates a folder named the Neptune project folder, which includes files named `{model_type}_{prediction}_{hemisphere}`, containing both the best and final models.
 
 ## Manuscript
 
