@@ -1,0 +1,144 @@
+"""
+Transolver Option B: SplineConv + Physics Attention (edge 정보를 특징으로 인코딩)
+"""
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch_geometric.nn import SplineConv
+from models.physics_attention import Physics_Attention
+from models.utils import compute_edge_features
+
+
+class deepRetinotopy_OptionB(torch.nn.Module):
+    """하이브리드 모델: SplineConv + Physics Attention (edge 정보를 특징으로 인코딩)"""
+    def __init__(self, num_features):
+        super(deepRetinotopy_OptionB, self).__init__()
+        # Edge feature encoder
+        self.edge_encoder = nn.Sequential(
+            nn.Linear(3, 8),  # 3 edge features -> 8 dim
+            nn.GELU(),
+            nn.Linear(8, 4)   # 4 dim output
+        )
+        
+        # 초기 SplineConv 레이어들
+        self.conv1 = SplineConv(num_features, 8, dim=3, kernel_size=25)
+        self.bn1 = torch.nn.BatchNorm1d(8)
+        self.conv2 = SplineConv(8, 16, dim=3, kernel_size=25)
+        self.bn2 = torch.nn.BatchNorm1d(16)
+        self.conv3 = SplineConv(16, 32, dim=3, kernel_size=25)
+        self.bn3 = torch.nn.BatchNorm1d(32)
+
+        # Physics Attention 블록 1 (edge 정보를 특징에 추가)
+        self.edge_proj1 = nn.Linear(4, 32)
+        self.phys_attn1 = Physics_Attention(dim=32, heads=8, dim_head=32//8,
+                                                           dropout=0.1, slice_num=32)
+        self.ln1 = nn.LayerNorm(32)
+        self.mlp1 = nn.Sequential(
+            nn.Linear(32, 128),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 32),
+            nn.Dropout(0.1)
+        )
+
+        # 중간 SplineConv 레이어들
+        self.conv4 = SplineConv(32, 32, dim=3, kernel_size=25)
+        self.bn4 = torch.nn.BatchNorm1d(32)
+        self.conv5 = SplineConv(32, 32, dim=3, kernel_size=25)
+        self.bn5 = torch.nn.BatchNorm1d(32)
+        self.conv6 = SplineConv(32, 32, dim=3, kernel_size=25)
+        self.bn6 = torch.nn.BatchNorm1d(32)
+
+        # Physics Attention 블록 2 (edge 정보를 특징에 추가)
+        self.edge_proj2 = nn.Linear(4, 32)
+        self.phys_attn2 = Physics_Attention(dim=32, heads=8, dim_head=32//8,
+                                                           dropout=0.1, slice_num=32)
+        self.ln2 = nn.LayerNorm(32)
+        self.mlp2 = nn.Sequential(
+            nn.Linear(32, 128),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 32),
+            nn.Dropout(0.1)
+        )
+
+        # 후반 SplineConv 레이어들
+        self.conv7 = SplineConv(32, 32, dim=3, kernel_size=25)
+        self.bn7 = torch.nn.BatchNorm1d(32)
+        self.conv8 = SplineConv(32, 32, dim=3, kernel_size=25)
+        self.bn8 = torch.nn.BatchNorm1d(32)
+        self.conv9 = SplineConv(32, 32, dim=3, kernel_size=25)
+        self.bn9 = torch.nn.BatchNorm1d(32)
+        self.conv10 = SplineConv(32, 16, dim=3, kernel_size=25)
+        self.bn10 = torch.nn.BatchNorm1d(16)
+        self.conv11 = SplineConv(16, 8, dim=3, kernel_size=25)
+        self.bn11 = torch.nn.BatchNorm1d(8)
+        self.conv12 = SplineConv(8, 1, dim=3, kernel_size=25)
+
+    def forward(self, data):
+        x, edge_index, pseudo = data.x, data.edge_index, data.edge_attr
+        pos = data.pos
+        
+        # Edge 정보를 특징으로 변환
+        edge_features = compute_edge_features(pos, edge_index, k=5)  # (N, 3)
+        encoded_edge_features = self.edge_encoder(edge_features)  # (N, 4)
+        
+        # 초기 SplineConv 레이어들 (edge 정보 직접 사용)
+        x = F.elu(self.conv1(x, edge_index, pseudo))
+        x = self.bn1(x)
+        x = F.dropout(x, p=.10, training=self.training)
+        x = F.elu(self.conv2(x, edge_index, pseudo))
+        x = self.bn2(x)
+        x = F.dropout(x, p=.10, training=self.training)
+        x = F.elu(self.conv3(x, edge_index, pseudo))
+        x = self.bn3(x)
+        x = F.dropout(x, p=.10, training=self.training)
+
+        # Physics Attention 블록 1 (edge 정보를 특징에 추가)
+        edge_proj = self.edge_proj1(encoded_edge_features)  # (N, 32)
+        x_with_edge = x + edge_proj
+        x_batch = x_with_edge.unsqueeze(0)  # (1, N, 32)
+        x_residual = x_batch
+        x_batch = self.phys_attn1(self.ln1(x_batch)) + x_residual
+        x_batch = self.mlp1(x_batch) + x_batch
+        x = x_batch.squeeze(0)  # (N, 32)로 복원
+
+        # 중간 SplineConv 레이어들 (edge 정보 직접 사용)
+        x = F.elu(self.conv4(x, edge_index, pseudo))
+        x = self.bn4(x)
+        x = F.dropout(x, p=.10, training=self.training)
+        x = F.elu(self.conv5(x, edge_index, pseudo))
+        x = self.bn5(x)
+        x = F.dropout(x, p=.10, training=self.training)
+        x = F.elu(self.conv6(x, edge_index, pseudo))
+        x = self.bn6(x)
+        x = F.dropout(x, p=.10, training=self.training)
+
+        # Physics Attention 블록 2 (edge 정보를 특징에 추가)
+        edge_proj = self.edge_proj2(encoded_edge_features)  # (N, 32)
+        x_with_edge = x + edge_proj
+        x_batch = x_with_edge.unsqueeze(0)  # (1, N, 32)
+        x_residual = x_batch
+        x_batch = self.phys_attn2(self.ln2(x_batch)) + x_residual
+        x_batch = self.mlp2(x_batch) + x_batch
+        x = x_batch.squeeze(0)  # (N, 32)로 복원
+
+        # 후반 SplineConv 레이어들 (edge 정보 직접 사용)
+        x = F.elu(self.conv7(x, edge_index, pseudo))
+        x = self.bn7(x)
+        x = F.dropout(x, p=.10, training=self.training)
+        x = F.elu(self.conv8(x, edge_index, pseudo))
+        x = self.bn8(x)
+        x = F.dropout(x, p=.10, training=self.training)
+        x = F.elu(self.conv9(x, edge_index, pseudo))
+        x = self.bn9(x)
+        x = F.dropout(x, p=.10, training=self.training)
+        x = F.elu(self.conv10(x, edge_index, pseudo))
+        x = self.bn10(x)
+        x = F.dropout(x, p=.10, training=self.training)
+        x = F.elu(self.conv11(x, edge_index, pseudo))
+        x = self.bn11(x)
+        x = F.dropout(x, p=.10, training=self.training)
+        x = F.elu(self.conv12(x, edge_index, pseudo)).view(-1)
+        return x
+

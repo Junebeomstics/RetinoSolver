@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Data (uncomment if you don't want to copy large data files)
+# Retinotopy/data/raw/
+# Retinotopy/data/processed/
+
+# Output files
+*.pt
+*.npz
+*.png
+*.pdf
+
+
+
+
+
+
+

@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  deepretinotopy:
+    image: vnmd/deepretinotopy_1.0.18:latest
+    container_name: deepretinotopy
+    volumes:
+      # Mount the project directory
+      - .:/workspace
+      # Mount data directory if needed
+      - ./Retinotopy/data:/workspace/Retinotopy/data
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    # GPU support for NVIDIA GPUs using Docker 19.03+ --gpus flag
+    # This requires nvidia-container-toolkit to be installed
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    # Use docker run with --gpus all if docker-compose doesn't work
+    # docker run --gpus all -it --name deepretinotopy -v $(pwd):/workspace -v $(pwd)/Retinotopy/data:/workspace/Retinotopy/data deepretinotopy:pytorch0.4.1 bash
+
+
