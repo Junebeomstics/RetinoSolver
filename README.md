@@ -43,6 +43,33 @@ docker pull vnmd/deepretinotopy_1.0.18:latest
 
 The image is ready to use. The experiment scripts will automatically use this image when running experiments.
 
+### Preparing Data
+
+Before running experiments, you need to process the raw data files. The raw data should be placed in `Retinotopy/data/raw/`, and then processed using the `process_raw.py` script to generate the processed data files in `Retinotopy/data/processed/`.
+
+**Processing raw data:**
+
+```bash
+# Make sure the Docker image is pulled
+docker pull vnmd/deepretinotopy_1.0.18:latest
+
+# Process raw data files
+docker run --rm --gpus all \
+  -v $(pwd):/workspace \
+  -v $(pwd)/Retinotopy/data:/workspace/Retinotopy/data \
+  -w /workspace \
+  vnmd/deepretinotopy_1.0.18:latest \
+  python process_raw.py
+```
+
+This script will:
+- Process raw data files from `Retinotopy/data/raw/`
+- Generate processed data files in `Retinotopy/data/processed/`
+- Create datasets for both eccentricity and polar angle predictions
+- Process data for both left and right hemispheres
+
+The processed files will be automatically used by the training scripts.
+
 ## Running Experiments
 
 ### Using the Unified Training Script
@@ -201,8 +228,35 @@ This folder contains all source code necessary to reproduce all figures and summ
 
 ## Models
 
-This folder contains all source code necessary to train a new model and to generate predictions on the test dataset 
-using our pre-trained models.
+This folder contains all source code necessary to train new models and generate predictions. The current implementation uses a unified training system with the following scripts:
+
+### Main Scripts
+
+- **`train_unified.py`**: Unified training script that supports multiple model architectures (baseline, transolver_optionA, transolver_optionB, transolver_optionC). This is the main script used for training and evaluation. It handles:
+  - Model training with configurable hyperparameters
+  - Validation and test set evaluation
+  - Checkpoint saving and loading
+  - Neptune logging integration
+  - Early stopping
+  - Test set evaluation with results saved in both `.pt` and `.npz` formats
+
+- **`run_all_experiments.sh`**: Automated script to run all experiment combinations. It:
+  - Automatically pulls Docker image if not present
+  - Creates or reuses a Docker container
+  - Runs all combinations of model types, predictions, and hemispheres
+  - Configurable via environment variables or script editing
+  - Supports Neptune logging
+
+- **`run_transolver_optionC_experiments_with_original_hyperparameters.sh`**: Dedicated script for running `transolver_optionC` experiments with optimized hyperparameters matching the original Transolver experiments (500 epochs, AdamW optimizer, cosine scheduler, etc.)
+
+- **`run_test_from_checkpoint.sh`**: Script to load a checkpoint and run test set evaluation only (no training). Useful for:
+  - Evaluating pre-trained models
+  - Testing models from different checkpoints
+  - Running inference on test sets without retraining
+
+### Legacy Scripts (from Original Paper)
+
+**Note:** The scripts mentioned in `Models/README.md` (e.g., `deepRetinotopy_ecc_LH.py`, `deepRetinotopy_PA_LH.py`, `ModelGeneralizability_*.py`) are from the original paper implementation and are **not actively used** in the current workflow. The current implementation uses the unified training system described above. These legacy scripts are kept for reference and reproducibility of the original paper results.
 
 ## Retinotopy
 
