@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Checkpoint를 불러와서 test set에 대해 inference만 실행하는 스크립트
+# Script to load checkpoint and run inference only on test set
 # This script loads a checkpoint and runs test set evaluation only (no training)
 
 # Set base directory
@@ -122,12 +122,14 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-# Check if Docker image exists
+# Check if Docker image exists, if not try to pull it
 if ! docker image inspect "$DOCKER_IMAGE" &> /dev/null; then
-    echo "Error: Docker image '$DOCKER_IMAGE' not found."
-    echo "Please build the image first or set DOCKER_IMAGE environment variable."
-    echo "Example: docker build -t $DOCKER_IMAGE ."
-    exit 1
+    echo "Docker image '$DOCKER_IMAGE' not found. Attempting to pull..."
+    if ! docker pull "$DOCKER_IMAGE"; then
+        echo "Error: Failed to pull Docker image '$DOCKER_IMAGE'."
+        echo "Please check the image name or set DOCKER_IMAGE environment variable."
+        exit 1
+    fi
 fi
 
 # Check if container is already running, or create/start it

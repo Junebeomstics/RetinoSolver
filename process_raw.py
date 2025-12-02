@@ -5,12 +5,12 @@ from Retinotopy.dataset.HCP_3sets_ROI import Retinotopy
 # from Retinotopy.dataset.HCP_3sets_ROI_notwin import Retinotopy as RetinotopyNotwin
 # from Retinotopy.dataset.HCP_3sets_ROI_splitHalves import Retinotopy as RetinotopySplitHalves
 
-# 데이터 경로 설정
+# Set data path
 path = osp.join(osp.dirname(osp.realpath(__file__)), 'Retinotopy', 'data')
 
 pre_transform = T.Compose([T.FaceToEdge()])
 
-# 기본 ROI 변형 - Eccentricity
+# Basic ROI variant - Eccentricity
 print("Processing Eccentricity - Left Hemisphere...")
 Retinotopy(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
            n_examples=181, prediction='eccentricity', myelination=True, hemisphere='Left')
@@ -18,7 +18,7 @@ print("Processing Eccentricity - Right Hemisphere...")
 Retinotopy(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
            n_examples=181, prediction='eccentricity', myelination=True, hemisphere='Right')
 
-# 기본 ROI 변형 - Polar Angle
+# Basic ROI variant - Polar Angle
 print("Processing Polar Angle - Left Hemisphere...")
 Retinotopy(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
            n_examples=181, prediction='polarAngle', myelination=True, hemisphere='Left')
@@ -26,17 +26,17 @@ print("Processing Polar Angle - Right Hemisphere...")
 Retinotopy(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
            n_examples=181, prediction='polarAngle', myelination=True, hemisphere='Right')
 
-# # Rotated 변형
+# # Rotated variant
 # print("Processing Rotated - Left Hemisphere...")
 # RetinotopyRotated(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
 #                   n_examples=181, prediction='polarAngle', myelination=True, hemisphere='Left')
 
-# # Notwin 변형
+# # Notwin variant
 # print("Processing Notwin - Left Hemisphere...")
 # RetinotopyNotwin(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
 #                  n_examples=181, prediction='polarAngle', myelination=True, hemisphere='Left')
 
-# # Split Halves 변형 (fit2, fit3)
+# # Split Halves variant (fit2, fit3)
 # print("Processing Split Halves fit2 - Left Hemisphere...")
 # RetinotopySplitHalves(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
 #                       n_examples=181, prediction='polarAngle', myelination=True, 

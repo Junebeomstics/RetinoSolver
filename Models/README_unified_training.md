@@ -1,27 +1,27 @@
 # Unified Training Script for deepRetinotopy Models
 
-이 스크립트는 baseline 모델과 Transolver 기반 모델들을 통합하여 하나의 스크립트로 다양한 실험을 실행할 수 있도록 합니다.
+This script integrates baseline models and Transolver-based models to run various experiments with a single script.
 
-## 파일 구조
+## File Structure
 
 ```
 Models/
-├── train_unified.py              # 통합 학습 스크립트
-├── run_all_experiments.sh        # 모든 실험 조합을 실행하는 스크립트
-├── run_single_experiment.sh      # 단일 실험을 실행하는 예제 스크립트
-├── models/                       # 모델 클래스들
+├── train_unified.py              # Unified training script
+├── run_all_experiments.sh        # Script to run all experiment combinations
+├── run_single_experiment.sh      # Example script to run a single experiment
+├── models/                       # Model classes
 │   ├── __init__.py
-│   ├── baseline.py                # Baseline 모델
-│   ├── transolver_optionA.py     # Transolver Option A 모델
-│   ├── transolver_optionB.py     # Transolver Option B 모델
-│   ├── physics_attention.py      # Physics Attention 모듈들
-│   └── utils.py                  # 유틸리티 함수들
-└── README_unified_training.md    # 이 파일
+│   ├── baseline.py                # Baseline model
+│   ├── transolver_optionA.py     # Transolver Option A model
+│   ├── transolver_optionB.py     # Transolver Option B model
+│   ├── physics_attention.py      # Physics Attention modules
+│   └── utils.py                  # Utility functions
+└── README_unified_training.md    # This file
 ```
 
-## 출력 디렉토리 구조
+## Output Directory Structure
 
-실험 결과는 다음과 같은 구조로 저장됩니다:
+Experiment results are saved in the following structure:
 
 ```
 output/
@@ -39,34 +39,34 @@ output/
 └── ...
 ```
 
-각 실험은 `{model_type}_{prediction}_{hemisphere}` 형식의 별도 폴더에 저장됩니다.
+Each experiment is saved in a separate folder named `{model_type}_{prediction}_{hemisphere}`.
 
-## 사용법
+## Usage
 
-### 1. 단일 실험 실행 (Docker 사용)
+### 1. Running a Single Experiment (Using Docker)
 
-**Docker를 사용한 실행 (권장):**
+**Running with Docker (Recommended):**
 
 ```bash
-# 기본 사용법
+# Basic usage
 ./run_single_experiment.sh baseline eccentricity Left
 
-# Docker 이미지 지정
+# Specify Docker image
 DOCKER_IMAGE=your_image:tag ./run_single_experiment.sh baseline eccentricity Left
 
-# GPU 비활성화
+# Disable GPU
 USE_GPU=false ./run_single_experiment.sh baseline eccentricity Left
 
-# Neptune 비활성화
+# Disable Neptune
 USE_NEPTUNE=false ./run_single_experiment.sh baseline eccentricity Left
 ```
 
-스크립트는 자동으로:
-- Docker 이미지 존재 여부 확인
-- 필요한 패키지 (neptune, einops) 설치
-- 도커 컨테이너에서 학습 실행
+The script automatically:
+- Checks if Docker image exists
+- Installs required packages (neptune, einops)
+- Runs training in Docker container
 
-**로컬에서 직접 실행:**
+**Running locally:**
 
 ```bash
 python train_unified.py \
@@ -79,22 +79,22 @@ python train_unified.py \
     --lr_decay 0.005
 ```
 
-### 2. 모든 실험 실행
+### 2. Running All Experiments
 
 ```bash
 ./run_all_experiments.sh
 ```
 
-이 스크립트는 다음 조합을 모두 실행합니다:
+This script runs all combinations of:
 - Model types: `baseline`, `transolver_optionA`, `transolver_optionB`
 - Predictions: `eccentricity`, `polarAngle`
 - Hemispheres: `Left`, `Right`
 
-총 12개의 실험이 실행됩니다 (3 × 2 × 2).
+A total of 12 experiments will be run (3 × 2 × 2).
 
-### 3. Neptune 로깅 활성화
+### 3. Enabling Neptune Logging
 
-Neptune을 사용하려면:
+To use Neptune:
 
 ```bash
 python train_unified.py \
@@ -106,7 +106,7 @@ python train_unified.py \
     --api_token your_api_token
 ```
 
-또는 환경 변수 사용:
+Or use environment variable:
 
 ```bash
 export NEPTUNE_API_TOKEN=your_api_token
@@ -118,61 +118,61 @@ python train_unified.py \
     --project your_project_name
 ```
 
-## 주요 Arguments
+## Main Arguments
 
-### 필수 Arguments
+### Required Arguments
 
-- `--model_type`: 모델 타입 선택
-  - `baseline`: 기본 SplineConv 모델
-  - `transolver_optionA`: Transolver Physics Attention (edge 정보 미사용)
-  - `transolver_optionB`: Transolver Physics Attention (edge 정보 간접 활용)
+- `--model_type`: Model type selection
+  - `baseline`: Basic SplineConv model
+  - `transolver_optionA`: Transolver Physics Attention (without edge information)
+  - `transolver_optionB`: Transolver Physics Attention (with encoded edge information)
 
-- `--prediction`: 예측 타겟
-  - `eccentricity`: Eccentricity 예측
-  - `polarAngle`: Polar Angle 예측
+- `--prediction`: Prediction target
+  - `eccentricity`: Eccentricity prediction
+  - `polarAngle`: Polar Angle prediction
 
-- `--hemisphere`: 반구 선택
-  - `Left`: 좌반구
-  - `Right`: 우반구
+- `--hemisphere`: Hemisphere selection
+  - `Left`: Left hemisphere
+  - `Right`: Right hemisphere
 
-### 선택적 Arguments
+### Optional Arguments
 
-- `--n_epochs`: 학습 epoch 수 (기본값: 200)
-- `--lr_init`: 초기 learning rate (기본값: 0.01)
-- `--lr_decay_epoch`: Learning rate 감소 epoch (기본값: 100)
-- `--lr_decay`: Learning rate 감소 후 값 (기본값: 0.005)
-- `--interm_save_every`: 중간 결과 저장 주기 (기본값: 25)
-- `--batch_size`: 배치 크기 (기본값: 1)
-- `--n_examples`: 예제 수 (기본값: 181)
-- `--output_dir`: 출력 디렉토리 (기본값: ./output)
-- `--myelination`: Myelination 특징 사용 여부 (기본값: True)
+- `--n_epochs`: Number of training epochs (default: 200)
+- `--lr_init`: Initial learning rate (default: 0.01)
+- `--lr_decay_epoch`: Epoch for learning rate decay (default: 100)
+- `--lr_decay`: Learning rate after decay (default: 0.005)
+- `--interm_save_every`: Intermediate result save interval (default: 25)
+- `--batch_size`: Batch size (default: 1)
+- `--n_examples`: Number of examples (default: 181)
+- `--output_dir`: Output directory (default: ./output)
+- `--myelination`: Whether to use Myelination features (default: True)
 
 ### Neptune Arguments
 
-- `--use_neptune`: Neptune 로깅 활성화
-- `--project`: Neptune 프로젝트 이름
-- `--api_token`: Neptune API 토큰 (환경 변수 `NEPTUNE_API_TOKEN` 사용 가능)
+- `--use_neptune`: Enable Neptune logging
+- `--project`: Neptune project name
+- `--api_token`: Neptune API token (can use `NEPTUNE_API_TOKEN` environment variable)
 
-## 모델 설명
+## Model Descriptions
 
 ### Baseline Model
-- 순수 SplineConv 기반 모델
-- 12개의 SplineConv 레이어로 구성
-- Edge 정보를 직접 활용
+- Pure SplineConv-based model
+- Consists of 12 SplineConv layers
+- Directly uses edge information
 
 ### Transolver Option A
-- SplineConv + Physics Attention 하이브리드 모델
-- Edge 정보를 사용하지 않음
-- Physics Attention은 노드 특징만 사용하여 물리적 상태를 학습
+- SplineConv + Physics Attention hybrid model
+- Does not use edge information
+- Physics Attention learns physical states using only node features
 
 ### Transolver Option B
-- SplineConv + Physics Attention 하이브리드 모델
-- Edge 정보를 특징으로 인코딩하여 활용
-- K-NN 거리, 노드 degree, local density 등을 특징으로 변환
+- SplineConv + Physics Attention hybrid model
+- Encodes edge information as features for use
+- Converts K-NN distance, node degree, local density, etc. into features
 
-## 예제
+## Examples
 
-### Eccentricity 예측 (Left Hemisphere, Baseline)
+### Eccentricity Prediction (Left Hemisphere, Baseline)
 
 ```bash
 python train_unified.py \
@@ -181,7 +181,7 @@ python train_unified.py \
     --hemisphere Left
 ```
 
-### Polar Angle 예측 (Right Hemisphere, Transolver Option A)
+### Polar Angle Prediction (Right Hemisphere, Transolver Option A)
 
 ```bash
 python train_unified.py \
@@ -202,35 +202,34 @@ python train_unified.py \
     --api_token your_token
 ```
 
-## 주의사항
+## Notes
 
-### Docker 사용 시
+### When Using Docker
 
-1. **Docker 이미지 준비:**
+1. **Pull Docker Image:**
    ```bash
-   # 프로젝트 루트에서 이미지 빌드
-   docker build -t vnmd/deepretinotopy_1.0.18:latest .
+   # Pull the pre-built Docker image
+   docker pull vnmd/deepretinotopy_1.0.18:latest
    ```
 
-2. **필요한 패키지 자동 설치:**
-   - 스크립트가 자동으로 `neptune`과 `einops`를 설치합니다
-   - 매 실행 시 설치하므로 첫 실행 시 약간의 시간이 소요될 수 있습니다
+2. **Automatic Package Installation:**
+   - The script automatically installs `neptune` and `einops`
+   - Since it installs on each run, the first run may take some time
 
-3. **Docker 이미지 이름 변경:**
-   - 환경 변수로 지정 가능: `DOCKER_IMAGE=your_image:tag`
+3. **Change Docker Image Name:**
+   - Can be specified via environment variable: `DOCKER_IMAGE=your_image:tag`
 
-4. **GPU 사용:**
-   - 기본적으로 GPU를 사용합니다 (`USE_GPU=true`)
-   - GPU를 사용하지 않으려면: `USE_GPU=false`
+4. **GPU Usage:**
+   - Uses GPU by default (`USE_GPU=true`)
+   - To disable GPU: `USE_GPU=false`
 
-### 일반 주의사항
+### General Notes
 
-1. Neptune을 사용하지 않으면 `USE_NEPTUNE=false`로 설정하거나 스크립트에서 수정하세요.
+1. If not using Neptune, set `USE_NEPTUNE=false` or modify it in the script.
 
-2. 각 실험은 독립적으로 실행되며, 결과는 별도의 폴더에 저장됩니다.
+2. Each experiment runs independently, and results are saved in separate folders.
 
-3. Docker를 사용하지 않는 경우, 로컬에 다음 패키지가 필요합니다:
+3. If not using Docker, the following packages are required locally:
    ```bash
    pip install einops neptune
    ```
-

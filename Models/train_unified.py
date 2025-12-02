@@ -108,12 +108,12 @@ test_only_mode = args.neptune_run_id is not None or args.checkpoint_path is not 
 # Path, Import, Dataset Preparation
 # =============================
 
-# 프로젝트 루트 디렉토리를 절대 경로로 추가
+# Add project root directory to sys.path as absolute path
 project_root = osp.dirname(osp.dirname(osp.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# Models 디렉토리를 sys.path에 추가 (models 모듈 import를 위해)
+# Add Models directory to sys.path (for importing models module)
 models_dir = osp.dirname(osp.abspath(__file__))
 if models_dir not in sys.path:
     sys.path.insert(0, models_dir)
@@ -129,7 +129,7 @@ from models import (
     deepRetinotopy_OptionC
 )
 
-# Neptune run 생성 (optional)
+# Create Neptune run (optional)
 run = None
 neptune_run_for_test = None  # For loading checkpoint from Neptune
 

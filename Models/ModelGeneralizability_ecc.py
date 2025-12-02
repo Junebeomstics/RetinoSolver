@@ -5,10 +5,13 @@ import torch.nn.functional as F
 import torch_geometric.transforms as T
 import sys
 
-sys.path.append('../..')
+# Add project root directory to sys.path as absolute path
+project_root = osp.dirname(osp.dirname(osp.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from Retinotopy.dataset.HCP_3sets_ROI import Retinotopy
-from torch_geometric.data import DataLoader
+from torch_geometric.loader import DataLoader
 from torch_geometric.nn import SplineConv
 
 path = osp.join(osp.dirname(osp.realpath(__file__)), '../Retinotopy', 'data')

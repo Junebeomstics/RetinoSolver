@@ -6,10 +6,13 @@ import torch_geometric.transforms as T
 import sys
 import time
 
-sys.path.append('../..')
+# Add project root directory to sys.path as absolute path
+project_root = osp.dirname(osp.dirname(osp.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from Retinotopy.dataset.HCP_3sets_ROI import Retinotopy
-from torch_geometric.data import DataLoader
+from torch_geometric.loader import DataLoader
 from torch_geometric.nn import SplineConv
 
 path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'Retinotopy', 'data')
@@ -28,43 +31,43 @@ dev_loader = DataLoader(dev_dataset, batch_size=1, shuffle=False)
 
 
 # Model
-class Net(torch.nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-        self.conv1 = SplineConv(2, 8, dim=3, kernel_size=25, norm=False)
+class deepRetinotopy(torch.nn.Module):
+    def __init__(self, num_features):
+        super(deepRetinotopy, self).__init__()
+        self.conv1 = SplineConv(num_features, 8, dim=3, kernel_size=25)
         self.bn1 = torch.nn.BatchNorm1d(8)
 
-        self.conv2 = SplineConv(8, 16, dim=3, kernel_size=25, norm=False)
+        self.conv2 = SplineConv(8, 16, dim=3, kernel_size=25)
         self.bn2 = torch.nn.BatchNorm1d(16)
 
-        self.conv3 = SplineConv(16, 32, dim=3, kernel_size=25, norm=False)
+        self.conv3 = SplineConv(16, 32, dim=3, kernel_size=25)
         self.bn3 = torch.nn.BatchNorm1d(32)
 
-        self.conv4 = SplineConv(32, 32, dim=3, kernel_size=25, norm=False)
+        self.conv4 = SplineConv(32, 32, dim=3, kernel_size=25)
         self.bn4 = torch.nn.BatchNorm1d(32)
 
-        self.conv5 = SplineConv(32, 32, dim=3, kernel_size=25, norm=False)
+        self.conv5 = SplineConv(32, 32, dim=3, kernel_size=25)
         self.bn5 = torch.nn.BatchNorm1d(32)
 
-        self.conv6 = SplineConv(32, 32, dim=3, kernel_size=25, norm=False)
+        self.conv6 = SplineConv(32, 32, dim=3, kernel_size=25)
         self.bn6 = torch.nn.BatchNorm1d(32)
 
-        self.conv7 = SplineConv(32, 32, dim=3, kernel_size=25, norm=False)
+        self.conv7 = SplineConv(32, 32, dim=3, kernel_size=25)
         self.bn7 = torch.nn.BatchNorm1d(32)
 
-        self.conv8 = SplineConv(32, 32, dim=3, kernel_size=25, norm=False)
+        self.conv8 = SplineConv(32, 32, dim=3, kernel_size=25)
         self.bn8 = torch.nn.BatchNorm1d(32)
 
-        self.conv9 = SplineConv(32, 32, dim=3, kernel_size=25, norm=False)
+        self.conv9 = SplineConv(32, 32, dim=3, kernel_size=25)
         self.bn9 = torch.nn.BatchNorm1d(32)
 
-        self.conv10 = SplineConv(32, 16, dim=3, kernel_size=25, norm=False)
+        self.conv10 = SplineConv(32, 16, dim=3, kernel_size=25)
         self.bn10 = torch.nn.BatchNorm1d(16)
 
-        self.conv11 = SplineConv(16, 8, dim=3, kernel_size=25, norm=False)
+        self.conv11 = SplineConv(16, 8, dim=3, kernel_size=25)
         self.bn11 = torch.nn.BatchNorm1d(8)
 
-        self.conv12 = SplineConv(8, 1, dim=3, kernel_size=25, norm=False)
+        self.conv12 = SplineConv(8, 1, dim=3, kernel_size=25)
 
     def forward(self, data):
         x, edge_index, pseudo = data.x, data.edge_index, data.edge_attr
@@ -117,7 +120,7 @@ class Net(torch.nn.Module):
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = Net().to(device)
+model = deepRetinotopy(num_features=2).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
 
@@ -140,7 +143,7 @@ def train(epoch):
         output_loss.backward()
 
         MAE = torch.mean(abs(
-            data.to(device).y.view(-1)[threshold == 1] - model(data)[
+            data.y.view(-1)[threshold == 1] - model(data)[
                 threshold == 1])).item()  # To check the performance of the
         # model while training
 

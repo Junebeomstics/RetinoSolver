@@ -33,7 +33,7 @@ class Physics_Attention(nn.Module):
     def forward(self, x):
         B, N, C = x.shape
 
-        # (1) Slice: 물리적 상태를 슬라이스 토큰으로 변환
+        # (1) Slice: Convert physical states to slice tokens
         fx_mid = self.in_project_fx(x).reshape(B, N, self.heads, self.dim_head) \
             .permute(0, 2, 1, 3).contiguous()  # B H N C
         x_mid = self.in_project_x(x).reshape(B, N, self.heads, self.dim_head) \
@@ -52,7 +52,7 @@ class Physics_Attention(nn.Module):
         attn = self.dropout(attn)
         out_slice_token = torch.matmul(attn, v_slice_token)  # B H G D
 
-        # (3) Deslice: 다시 노드로 변환
+        # (3) Deslice: Convert back to nodes
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice_token, slice_weights)
         out_x = rearrange(out_x, 'b h n d -> b n (h d)')
         return self.to_out(out_x)

@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Transolver OptionC 하이퍼파라미터 탐색 실험 스크립트
-# 10GB 메모리 제약을 고려하여 동시 실행 개수를 제한하고 순차적으로 실행
+# Transolver OptionC hyperparameter search experiment script
+# Limits concurrent executions and runs sequentially considering 10GB memory constraints
 
 # Set base directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,11 +70,14 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-# Check if Docker image exists
+# Check if Docker image exists, if not try to pull it
 if ! docker image inspect "$DOCKER_IMAGE" &> /dev/null; then
-    echo "Error: Docker image '$DOCKER_IMAGE' not found."
-    echo "Please build the image first or set DOCKER_IMAGE environment variable."
-    exit 1
+    echo "Docker image '$DOCKER_IMAGE' not found. Attempting to pull..."
+    if ! docker pull "$DOCKER_IMAGE"; then
+        echo "Error: Failed to pull Docker image '$DOCKER_IMAGE'."
+        echo "Please check the image name or set DOCKER_IMAGE environment variable."
+        exit 1
+    fi
 fi
 
 # Check if container is already running, or create/start it

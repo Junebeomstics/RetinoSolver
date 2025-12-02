@@ -4,7 +4,7 @@ scipy>=1.10.0
 pandas>=2.0.0
 scikit-learn>=1.3.0
 
-# Deep learning frameworks (installed separately in Dockerfile)
+# Deep learning frameworks (installed separately in Docker image)
 # torch>=2.1.0
 # torchvision>=0.16.0
 # torch-geometric>=2.4.0

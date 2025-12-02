@@ -8,7 +8,7 @@ import sys
 import time
 from einops import rearrange
 
-# 프로젝트 루트 디렉토리를 절대 경로로 추가
+# Add project root directory to sys.path as absolute path
 project_root = osp.dirname(osp.dirname(osp.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
@@ -17,9 +17,9 @@ from Retinotopy.dataset.HCP_3sets_ROI import Retinotopy
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import SplineConv
 
-# Physics Attention 모듈 (Transolver에서 가져옴)
+# Physics Attention module (from Transolver)
 class Physics_Attention_Irregular_Mesh(nn.Module):
-    """Physics Attention for irregular meshes - edge 정보 사용 안 함"""
+    """Physics Attention for irregular meshes - does not use edge information"""
     def __init__(self, dim, heads=8, dim_head=64, dropout=0., slice_num=64):
         super().__init__()
         inner_dim = dim_head * heads
@@ -44,10 +44,10 @@ class Physics_Attention_Irregular_Mesh(nn.Module):
         )
 
     def forward(self, x):
-        # x: (B, N, C) 형태만 받음, edge 정보는 사용 안 함
+        # x: Only receives (B, N, C) format, does not use edge information
         B, N, C = x.shape
 
-        # (1) Slice: 물리적 상태를 슬라이스 토큰으로 변환
+        # (1) Slice: Convert physical states to slice tokens
         fx_mid = self.in_project_fx(x).reshape(B, N, self.heads, self.dim_head) \
             .permute(0, 2, 1, 3).contiguous()  # B H N C
         x_mid = self.in_project_x(x).reshape(B, N, self.heads, self.dim_head) \
@@ -66,17 +66,17 @@ class Physics_Attention_Irregular_Mesh(nn.Module):
         attn = self.dropout(attn)
         out_slice_token = torch.matmul(attn, v_slice_token)  # B H G D
 
-        # (3) Deslice: 다시 노드로 변환
+        # (3) Deslice: Convert back to nodes
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice_token, slice_weights)
         out_x = rearrange(out_x, 'b h n d -> b n (h d)')
         return self.to_out(out_x)
 
 
 class deepRetinotopy_OptionA(torch.nn.Module):
-    """하이브리드 모델: SplineConv + Physics Attention (edge 정보 미사용)"""
+    """Hybrid model: SplineConv + Physics Attention (without edge information)"""
     def __init__(self, num_features):
         super(deepRetinotopy_OptionA, self).__init__()
-        # 초기 SplineConv 레이어들
+        # Initial SplineConv layers
         self.conv1 = SplineConv(num_features, 8, dim=3, kernel_size=25)
         self.bn1 = torch.nn.BatchNorm1d(8)
         self.conv2 = SplineConv(8, 16, dim=3, kernel_size=25)
@@ -84,7 +84,7 @@ class deepRetinotopy_OptionA(torch.nn.Module):
         self.conv3 = SplineConv(16, 32, dim=3, kernel_size=25)
         self.bn3 = torch.nn.BatchNorm1d(32)
 
-        # Physics Attention 블록 1 (conv3 이후)
+        # Physics Attention block 1 (after conv3)
         self.phys_attn1 = Physics_Attention_Irregular_Mesh(dim=32, heads=8, dim_head=32//8, 
                                                            dropout=0.1, slice_num=32)
         self.ln1 = nn.LayerNorm(32)
@@ -96,7 +96,7 @@ class deepRetinotopy_OptionA(torch.nn.Module):
             nn.Dropout(0.1)
         )
 
-        # 중간 SplineConv 레이어들
+        # Middle SplineConv layers
         self.conv4 = SplineConv(32, 32, dim=3, kernel_size=25)
         self.bn4 = torch.nn.BatchNorm1d(32)
         self.conv5 = SplineConv(32, 32, dim=3, kernel_size=25)
@@ -104,7 +104,7 @@ class deepRetinotopy_OptionA(torch.nn.Module):
         self.conv6 = SplineConv(32, 32, dim=3, kernel_size=25)
         self.bn6 = torch.nn.BatchNorm1d(32)
 
-        # Physics Attention 블록 2 (conv6 이후)
+        # Physics Attention block 2 (after conv6)
         self.phys_attn2 = Physics_Attention_Irregular_Mesh(dim=32, heads=8, dim_head=32//8,
                                                            dropout=0.1, slice_num=32)
         self.ln2 = nn.LayerNorm(32)
@@ -116,7 +116,7 @@ class deepRetinotopy_OptionA(torch.nn.Module):
             nn.Dropout(0.1)
         )
 
-        # 후반 SplineConv 레이어들
+        # Final SplineConv layers
         self.conv7 = SplineConv(32, 32, dim=3, kernel_size=25)
         self.bn7 = torch.nn.BatchNorm1d(32)
         self.conv8 = SplineConv(32, 32, dim=3, kernel_size=25)
@@ -132,7 +132,7 @@ class deepRetinotopy_OptionA(torch.nn.Module):
     def forward(self, data):
         x, edge_index, pseudo = data.x, data.edge_index, data.edge_attr
         
-        # 초기 SplineConv 레이어들 (edge 정보 사용)
+        # Initial SplineConv layers (using edge information)
         x = F.elu(self.conv1(x, edge_index, pseudo))
         x = self.bn1(x)
         x = F.dropout(x, p=.10, training=self.training)
@@ -143,15 +143,15 @@ class deepRetinotopy_OptionA(torch.nn.Module):
         x = self.bn3(x)
         x = F.dropout(x, p=.10, training=self.training)
 
-        # Physics Attention 블록 1 (edge 정보 미사용)
-        # (N, C) -> (1, N, C)로 변환
+        # Physics Attention block 1 (without edge information)
+        # Convert (N, C) -> (1, N, C)
         x_batch = x.unsqueeze(0)  # (1, N, 32)
         x_residual = x_batch
         x_batch = self.phys_attn1(self.ln1(x_batch)) + x_residual  # Residual connection
         x_batch = self.mlp1(x_batch) + x_batch  # MLP with residual
-        x = x_batch.squeeze(0)  # (N, 32)로 복원
+        x = x_batch.squeeze(0)  # Restore to (N, 32)
 
-        # 중간 SplineConv 레이어들 (edge 정보 사용)
+        # Middle SplineConv layers (using edge information)
         x = F.elu(self.conv4(x, edge_index, pseudo))
         x = self.bn4(x)
         x = F.dropout(x, p=.10, training=self.training)
@@ -162,14 +162,14 @@ class deepRetinotopy_OptionA(torch.nn.Module):
         x = self.bn6(x)
         x = F.dropout(x, p=.10, training=self.training)
 
-        # Physics Attention 블록 2 (edge 정보 미사용)
+        # Physics Attention block 2 (without edge information)
         x_batch = x.unsqueeze(0)  # (1, N, 32)
         x_residual = x_batch
         x_batch = self.phys_attn2(self.ln2(x_batch)) + x_residual
         x_batch = self.mlp2(x_batch) + x_batch
-        x = x_batch.squeeze(0)  # (N, 32)로 복원
+        x = x_batch.squeeze(0)  # Restore to (N, 32)
 
-        # 후반 SplineConv 레이어들 (edge 정보 사용)
+        # Final SplineConv layers (using edge information)
         x = F.elu(self.conv7(x, edge_index, pseudo))
         x = self.bn7(x)
         x = F.dropout(x, p=.10, training=self.training)
