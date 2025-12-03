@@ -43,6 +43,22 @@ class Retinotopy(InMemoryDataset):
     def raw_file_names(self):
         return 'S1200_7T_Retinotopy_9Zkk.zip'
 
+    def _download(self):
+        # Check if converted data already exists
+        converted_path = osp.join(self.raw_dir, 'converted')
+        if osp.exists(converted_path):
+            print(f"Converted data already exists at {converted_path}. Skipping download.")
+            return
+        
+        # Check if raw zip file exists
+        raw_file_path = osp.join(self.raw_dir, self.raw_file_names)
+        if osp.exists(raw_file_path):
+            print(f"Raw data file already exists at {raw_file_path}. Skipping download.")
+            return
+        
+        # If neither exists, call parent's _download which will call download()
+        super()._download()
+
     @property
     def processed_file_names(self):
         if self.hemisphere == 'Left':
@@ -117,6 +133,19 @@ class Retinotopy(InMemoryDataset):
                         'test_pRFsize_RH_ROI.pt']
 
     def download(self):
+        # Check if converted data already exists
+        converted_path = osp.join(self.raw_dir, 'converted')
+        if osp.exists(converted_path):
+            print(f"Converted data already exists at {converted_path}. Skipping download.")
+            return
+        
+        # Check if raw zip file exists
+        raw_file_path = osp.join(self.raw_dir, self.raw_file_names)
+        if osp.exists(raw_file_path):
+            print(f"Raw data file already exists at {raw_file_path}. Skipping download.")
+            return
+        
+        # If neither exists, raise error
         raise RuntimeError(
             'Dataset not found. Please download S1200_7T_Retinotopy_9Zkk.zip '
             'from {} and '

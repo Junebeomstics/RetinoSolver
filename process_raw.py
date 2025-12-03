@@ -10,22 +10,30 @@ path = osp.join(osp.dirname(osp.realpath(__file__)), 'Retinotopy', 'data')
 
 pre_transform = T.Compose([T.FaceToEdge()])
 
-# Basic ROI variant - Eccentricity
-print("Processing Eccentricity - Left Hemisphere...")
-Retinotopy(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
-           n_examples=181, prediction='eccentricity', myelination=True, hemisphere='Left')
-print("Processing Eccentricity - Right Hemisphere...")
-Retinotopy(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
-           n_examples=181, prediction='eccentricity', myelination=True, hemisphere='Right')
+# # Basic ROI variant - Eccentricity
+# print("Processing Eccentricity - Left Hemisphere...")
+# Retinotopy(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
+#            n_examples=181, prediction='eccentricity', myelination=True, hemisphere='Left')
+# print("Processing Eccentricity - Right Hemisphere...")
+# Retinotopy(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
+#            n_examples=181, prediction='eccentricity', myelination=True, hemisphere='Right')
 
-# Basic ROI variant - Polar Angle
-print("Processing Polar Angle - Left Hemisphere...")
-Retinotopy(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
-           n_examples=181, prediction='polarAngle', myelination=True, hemisphere='Left')
-print("Processing Polar Angle - Right Hemisphere...")
-Retinotopy(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
-           n_examples=181, prediction='polarAngle', myelination=True, hemisphere='Right')
+# # Basic ROI variant - Polar Angle
+# print("Processing Polar Angle - Left Hemisphere...")
+# Retinotopy(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
+#            n_examples=181, prediction='polarAngle', myelination=True, hemisphere='Left')
+# print("Processing Polar Angle - Right Hemisphere...")
+# Retinotopy(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
+#            n_examples=181, prediction='polarAngle', myelination=True, hemisphere='Right')
 
+# Basic ROI variant - pRFsize
+print("Processing pRFsize - Left Hemisphere...")
+Retinotopy(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
+           n_examples=181, prediction='pRFsize', myelination=True, hemisphere='Left')
+print("Processing pRFsize - Right Hemisphere...")
+Retinotopy(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
+           n_examples=181, prediction='pRFsize', myelination=True, hemisphere='Right')
+           
 # # Rotated variant
 # print("Processing Rotated - Left Hemisphere...")
 # RetinotopyRotated(path, 'Train', transform=T.Cartesian(), pre_transform=pre_transform, 
