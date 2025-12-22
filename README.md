@@ -2,6 +2,8 @@
 
 This repository contains all source code necessary to replicate our recent work entitled "Predicting the retinotopic organization of human visual cortex from anatomy using geometric deep learning" available in [NeuroImage](https://www.sciencedirect.com/science/article/pii/S1053811921008971).
 
+**Note:** This repository is developed based on the original [deepRetinotopy repository](https://github.com/Puckett-Lab/deepRetinotopy). We extend the original implementation with additional features and improvements.
+
 ## Table of Contents
 * [Quick Start with Docker](#quick-start-with-docker)
 * [Running Experiments](#running-experiments)
@@ -44,6 +46,23 @@ docker pull vnmd/deepretinotopy_1.0.18:latest
 The image is ready to use. The experiment scripts will automatically use this image when running experiments.
 
 ### Preparing Data
+
+**Downloading Data:**
+
+Due to the large size of the data files, the `Retinotopy/data` folder contents are hosted on Google Drive instead of being included in this repository. Please download the data from the following link:
+
+📦 **Data Download**: [Google Drive Link](https://drive.google.com/drive/folders/1o-MFVX_vOQ82qFhDibA8fBIP28_DaKpl?usp=sharing)
+
+After downloading, extract the contents to `Retinotopy/data/` directory. The folder structure should be:
+```
+Retinotopy/data/
+├── raw/
+│   ├── converted/
+│   └── surfaces/
+└── processed/
+```
+
+**Processing Raw Data:**
 
 Before running experiments, you need to process the raw data files. The raw data should be placed in `Retinotopy/data/raw/`, and then processed using the `process_raw.py` script to generate the processed data files in `Retinotopy/data/processed/`.
 
@@ -261,7 +280,9 @@ This folder contains all source code necessary to train new models and generate 
 ## Retinotopy
 
 This folder contains all source code necessary to replicate datasets generation, in addition to functions and labels 
-used for figures and models' evaluation. 
+used for figures and models' evaluation.
+
+**Note:** The data files in `Retinotopy/data/` are not included in this repository due to their large size. Please download them from [Google Drive](https://drive.google.com/drive/folders/1o-MFVX_vOQ82qFhDibA8fBIP28_DaKpl?usp=sharing) and place them in the `Retinotopy/data/` directory before running experiments. 
 
 ## Citation
 
@@ -281,6 +302,11 @@ Please cite our paper if you used our model or if it was somewhat helpful for yo
 
 
 ## Contact
-Fernanda Ribeiro <[fernanda.ribeiro@uq.edu.au](fernanda.ribeiro@uq.edu.au)>
 
-Alex Puckett <[a.puckett@uq.edu.au](a.puckett@uq.edu.au)>
+For questions and inquiries about this repository, please contact:
+
+Junbeom Kwon <[kjb961013@gmail.com](mailto:kjb961013@gmail.com)>
+
+**Original Authors:**
+- Fernanda Ribeiro <[fernanda.ribeiro@uq.edu.au](mailto:fernanda.ribeiro@uq.edu.au)>
+- Alex Puckett <[a.puckett@uq.edu.au](mailto:a.puckett@uq.edu.au)>
