@@ -57,16 +57,23 @@ After downloading, extract the contents to `Retinotopy/data/` directory. The fol
 ```
 Retinotopy/data/
 ├── raw/
-│   ├── converted/
-│   └── surfaces/
-└── processed/
+│   ├── converted/        # Pre-converted data files (.mat files)
+│   └── surfaces/         # Surface files (.surf.gii files)
+└── processed/            # Pre-processed dataset files (.pt files)
 ```
 
-**Processing Raw Data:**
+**Important:** The Google Drive package includes both `converted/` and `processed/` folders. If you have the complete package, you can skip the data processing step and proceed directly to running experiments.
 
-Before running experiments, you need to process the raw data files. The raw data should be placed in `Retinotopy/data/raw/`, and then processed using the `process_raw.py` script to generate the processed data files in `Retinotopy/data/processed/`.
+**Data Processing:**
 
-**Processing raw data:**
+The Google Drive data package includes both `converted/` and `processed/` folders. If you have downloaded the complete data package:
+
+- **If `Retinotopy/data/processed/` folder exists**: The training scripts will automatically use the pre-processed data files. No additional processing is needed.
+- **If only `Retinotopy/data/raw/converted/` folder exists**: The training scripts will automatically process the data on first run. The processed files will be generated in `Retinotopy/data/processed/` automatically.
+
+**Manual Processing (Optional):**
+
+If you need to manually process the raw data (e.g., to regenerate processed files or process additional prediction types), you can use the `process_raw.py` script:
 
 ```bash
 # Make sure the Docker image is pulled
@@ -81,13 +88,7 @@ docker run --rm --gpus all \
   python process_raw.py
 ```
 
-This script will:
-- Process raw data files from `Retinotopy/data/raw/`
-- Generate processed data files in `Retinotopy/data/processed/`
-- Create datasets for both eccentricity and polar angle predictions
-- Process data for both left and right hemispheres
-
-The processed files will be automatically used by the training scripts.
+**Note:** The training scripts (`train_unified.py`) automatically check for existing processed files and will skip processing if they already exist. If you have downloaded the complete data package from Google Drive, you can proceed directly to running experiments without running `process_raw.py`.
 
 ## Running Experiments
 
@@ -113,18 +114,22 @@ This script will:
 - Automatically check for Docker and pull the required Docker image if not present
 - Create or reuse a Docker container
 - Run all combinations of:
-  - Model types: `baseline`, `transolver_optionA`, `transolver_optionB`
-  - Predictions: `eccentricity`, `polarAngle`
+  - Model types: `baseline`, `transolver_optionA`, `transolver_optionB`, `transolver_optionC`
+  - Predictions: `eccentricity`, `polarAngle`, `pRFsize`
   - Hemispheres: `Left`, `Right`
+- Automatically apply optimized hyperparameters for `transolver_optionC` when selected
+- Support Wandb logging for experiment tracking
 
 **Configuration:**
 
 You can customize the script by editing `Models/run_all_experiments.sh`:
 - `DOCKER_IMAGE`: Docker image name (default: `vnmd/deepretinotopy_1.0.18:latest`)
 - `USE_GPU`: Enable/disable GPU (default: `true`)
-- `USE_NEPTUNE`: Enable/disable Neptune logging (default: `true`)
+- `USE_WANDB`: Enable/disable Wandb logging (default: `true`)
+- `WANDB_PROJECT`: Wandb project name (default: `retinotopic_mapping`)
 - `MODEL_TYPES`, `PREDICTIONS`, `HEMISPHERES`: Arrays defining which experiments to run
 - Training hyperparameters: `N_EPOCHS`, `LR_INIT`, `LR_DECAY_EPOCH`, etc.
+- `transolver_optionC` specific parameters: `N_EPOCHS_OPTIONC`, `LR_INIT_OPTIONC`, `N_LAYERS_OPTIONC`, etc.
 
 **Example: Running specific experiments**
 
@@ -137,32 +142,28 @@ HEMISPHERES=("Left")
 
 ### Running Transolver Option C Experiments
 
-For `transolver_optionC` model, which uses the original Transolver hyperparameters optimized for unstructured mesh experiments, use the dedicated script:
+The `transolver_optionC` model is fully integrated into the unified training system. You can run it using the same `run_all_experiments.sh` script - no separate script is needed.
+
+**To run transolver_optionC:**
+
+Simply include `transolver_optionC` in the `MODEL_TYPES` array in `Models/run_all_experiments.sh`:
 
 ```bash
-cd Models
-chmod +x run_transolver_optionC_experiments_with_original_hyperparameters.sh
-./run_transolver_optionC_experiments_with_original_hyperparameters.sh
+MODEL_TYPES=("transolver_optionC")  # or combine with other models
 ```
 
-This script runs `transolver_optionC` with the following optimized hyperparameters:
+The script automatically detects `transolver_optionC` and applies optimized hyperparameters:
 - **Training**: 500 epochs, AdamW optimizer, cosine scheduler
 - **Learning rate**: Initial 0.001, decays to 0.0001 at epoch 250
 - **Architecture**: 8 layers, 128 hidden dimensions, 8 attention heads
 - **Other settings**: Weight decay 1e-5, max gradient norm 0.1, dropout 0.0
 
-The script automatically runs all combinations of:
-- Predictions: `eccentricity`, `polarAngle`
-- Hemispheres: `Left`, `Right`
-
 **Configuration:**
 
-You can customize the script by editing `Models/run_transolver_optionC_experiments_with_original_hyperparameters.sh`:
-- `DOCKER_IMAGE`: Docker image name (default: `vnmd/deepretinotopy_1.0.18:latest`)
-- `USE_GPU`: Enable/disable GPU (default: `true`)
-- `USE_NEPTUNE`: Enable/disable Neptune logging (default: `true`)
-- `PREDICTIONS`, `HEMISPHERES`: Arrays defining which experiments to run
-- Architecture hyperparameters: `N_LAYERS`, `N_HIDDEN`, `N_HEADS`, `SLICE_NUM`, etc.
+You can customize the transolver_optionC parameters by editing `Models/run_all_experiments.sh`:
+- `N_EPOCHS_OPTIONC`, `LR_INIT_OPTIONC`, `LR_DECAY_OPTIONC`: Training parameters
+- `N_LAYERS_OPTIONC`, `N_HIDDEN_OPTIONC`, `N_HEADS_OPTIONC`: Architecture parameters
+- `SLICE_NUM_OPTIONC`, `MLP_RATIO_OPTIONC`, `DROPOUT_OPTIONC`: Model-specific parameters
 
 ### Running a Single Experiment
 
@@ -218,28 +219,48 @@ docker run --rm --gpus all \
 - `--ref`: Reference parameter (default: 8)
 - `--unified_pos`: Unified position encoding flag (default: 0)
 
-**Neptune Logging:**
-- `--use_neptune`: Enable Neptune logging
-- `--project`: Neptune project name
-- `--api_token`: Neptune API token (or set `NEPTUNE_API_TOKEN` environment variable)
-
 For more detailed information, see [Models/README_unified_training.md](Models/README_unified_training.md).
 
 ### Output Structure
 
-Results are saved in the following structure:
+Results are saved in the following structure (default output directory: `Models/output_wandb/`):
+
+**Without Wandb (or when Wandb is disabled):**
 ```
-Models/output/
-├── RET-XXX
-│   ├── baseline_ecc_Left_best_model_epoch25.pt
-│   ├── baseline_ecc_Left_final_model.pt
+Models/output_wandb/
+├── {prediction}_{hemisphere}_{model_type}/
+│   ├── {prediction_short}_{hemisphere}_{model_type}_best_model_epoch{epoch}.pt
+│   ├── {prediction_short}_{hemisphere}_{model_type}_best_test_results.pt
+│   ├── {prediction_short}_{hemisphere}_{model_type}_final_model.pt
+│   └── {prediction_short}_{hemisphere}_{model_type}_final_test_results.pt
+├── {prediction}_{hemisphere}_{model_type}_noMyelin/
 │   └── ...
-├── RET-XXX
-├── RET-XXX
 └── ...
 ```
 
-Each experiment creates a folder named the Neptune project folder, which includes files named `{model_type}_{prediction}_{hemisphere}`, containing both the best and final models.
+**With Wandb enabled:**
+```
+Models/output_wandb/
+├── {wandb_run_name}/
+│   ├── {prediction_short}_{hemisphere}_{model_type}_best_model_epoch{epoch}.pt
+│   ├── {prediction_short}_{hemisphere}_{model_type}_best_test_results.pt
+│   ├── {prediction_short}_{hemisphere}_{model_type}_final_model.pt
+│   └── {prediction_short}_{hemisphere}_{model_type}_final_test_results.pt
+└── ...
+```
+
+**File naming convention:**
+- `{prediction_short}`: `ecc` (eccentricity), `PA` (polarAngle), `size` (pRFsize)
+- `{hemisphere}`: `Left` or `Right`
+- `{model_type}`: `baseline`, `transolver_optionA`, `transolver_optionB`, `transolver_optionC`
+- `{myelination_suffix}`: `_noMyelin` if myelination is disabled, empty otherwise
+- `{wandb_run_name}`: Automatically generated run name when Wandb is enabled (includes model type, prediction, hemisphere, and myelination info)
+
+**Output files:**
+- **Best model** (`*_best_model_epoch{epoch}.pt`): Model checkpoint from the epoch with the lowest validation MAE_thr
+- **Final model** (`*_final_model.pt`): Model checkpoint from the final training epoch
+- **Best test results** (`*_best_test_results.pt`): Test set evaluation results using the best model (contains predictions, ground truth, R2 values, and MAE metrics)
+- **Final test results** (`*_final_test_results.pt`): Test set evaluation results using the final model
 
 ## Manuscript
 
@@ -255,18 +276,19 @@ This folder contains all source code necessary to train new models and generate 
   - Model training with configurable hyperparameters
   - Validation and test set evaluation
   - Checkpoint saving and loading
-  - Neptune logging integration
+  - Wandb logging integration
   - Early stopping
   - Test set evaluation with results saved in both `.pt` and `.npz` formats
 
 - **`run_all_experiments.sh`**: Automated script to run all experiment combinations. It:
   - Automatically pulls Docker image if not present
   - Creates or reuses a Docker container
-  - Runs all combinations of model types, predictions, and hemispheres
+  - Runs all combinations of model types (including `transolver_optionC`), predictions, and hemispheres
+  - Automatically applies optimized hyperparameters for `transolver_optionC` when selected
   - Configurable via environment variables or script editing
-  - Supports Neptune logging
+  - Supports Wandb logging for experiment tracking
 
-- **`run_transolver_optionC_experiments_with_original_hyperparameters.sh`**: Dedicated script for running `transolver_optionC` experiments with optimized hyperparameters matching the original Transolver experiments (500 epochs, AdamW optimizer, cosine scheduler, etc.)
+- **`run_transolver_optionC_hyperparameter_search.sh`**: Script for hyperparameter search experiments with `transolver_optionC` (optional, for advanced users)
 
 - **`run_test_from_checkpoint.sh`**: Script to load a checkpoint and run test set evaluation only (no training). Useful for:
   - Evaluating pre-trained models
