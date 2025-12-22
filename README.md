@@ -1,8 +1,8 @@
 # DeepRetinotopy
 
-This repository contains all source code necessary to replicate our recent work entitled "Predicting the retinotopic organization of human visual cortex from anatomy using geometric deep learning" available in [NeuroImage](https://www.sciencedirect.com/science/article/pii/S1053811921008971).
+This repository extends and improves upon the original [deepRetinotopy repository](https://github.com/Puckett-Lab/deepRetinotopy) developed by Ribeiro et al. (2021) in their work "Predicting the retinotopic organization of human visual cortex from anatomy using geometric deep learning" published in [NeuroImage](https://www.sciencedirect.com/science/article/pii/S1053811921008971).
 
-**Note:** This repository is developed based on the original [deepRetinotopy repository](https://github.com/Puckett-Lab/deepRetinotopy). We extend the original implementation with additional features and improvements.
+**Purpose:** This repository aims to evaluate and compare multiple model architectures beyond the original deepRetinotopy baseline, including various Transolver-based architectures. Additionally, we extend the evaluation to test multiple retinotopic variables (eccentricity, polar angle, and pRF size) beyond the original PRF predictions.
 
 ## Table of Contents
 * [Quick Start with Docker](#quick-start-with-docker)
@@ -117,7 +117,7 @@ This script will:
   - Model types: `baseline`, `transolver_optionA`, `transolver_optionB`, `transolver_optionC`
   - Predictions: `eccentricity`, `polarAngle`, `pRFsize`
   - Hemispheres: `Left`, `Right`
-- Automatically apply optimized hyperparameters for `transolver_optionC` when selected
+- Automatically apply optimized hyperparameters for `transolver_optionC` when selected (see Hyperparameters section below)
 - Support Wandb logging for experiment tracking
 
 **Configuration:**
@@ -129,7 +129,17 @@ You can customize the script by editing `Models/run_all_experiments.sh`:
 - `WANDB_PROJECT`: Wandb project name (default: `retinotopic_mapping`)
 - `MODEL_TYPES`, `PREDICTIONS`, `HEMISPHERES`: Arrays defining which experiments to run
 - Training hyperparameters: `N_EPOCHS`, `LR_INIT`, `LR_DECAY_EPOCH`, etc.
-- `transolver_optionC` specific parameters: `N_EPOCHS_OPTIONC`, `LR_INIT_OPTIONC`, `N_LAYERS_OPTIONC`, etc.
+
+**Hyperparameters:**
+
+The script uses different hyperparameter settings for `transolver_optionC` compared to other models, considering the original Transolver architecture requirements:
+- **transolver_optionC**: 500 epochs, AdamW optimizer, cosine scheduler, initial learning rate 0.001 (decays to 0.0001 at epoch 250), 8 layers, 128 hidden dimensions, 8 attention heads, weight decay 1e-5, max gradient norm 0.1, dropout 0.0
+- **Other models** (baseline, transolver_optionA, transolver_optionB): Use standard hyperparameters defined by `N_EPOCHS`, `LR_INIT`, `LR_DECAY_EPOCH`, etc.
+
+You can customize the transolver_optionC parameters by editing `Models/run_all_experiments.sh`:
+- `N_EPOCHS_OPTIONC`, `LR_INIT_OPTIONC`, `LR_DECAY_OPTIONC`: Training parameters
+- `N_LAYERS_OPTIONC`, `N_HIDDEN_OPTIONC`, `N_HEADS_OPTIONC`: Architecture parameters
+- `SLICE_NUM_OPTIONC`, `MLP_RATIO_OPTIONC`, `DROPOUT_OPTIONC`: Model-specific parameters
 
 **Example: Running specific experiments**
 
@@ -139,31 +149,6 @@ MODEL_TYPES=("baseline" "transolver_optionA")
 PREDICTIONS=("eccentricity")
 HEMISPHERES=("Left")
 ```
-
-### Running Transolver Option C Experiments
-
-The `transolver_optionC` model is fully integrated into the unified training system. You can run it using the same `run_all_experiments.sh` script - no separate script is needed.
-
-**To run transolver_optionC:**
-
-Simply include `transolver_optionC` in the `MODEL_TYPES` array in `Models/run_all_experiments.sh`:
-
-```bash
-MODEL_TYPES=("transolver_optionC")  # or combine with other models
-```
-
-The script automatically detects `transolver_optionC` and applies optimized hyperparameters:
-- **Training**: 500 epochs, AdamW optimizer, cosine scheduler
-- **Learning rate**: Initial 0.001, decays to 0.0001 at epoch 250
-- **Architecture**: 8 layers, 128 hidden dimensions, 8 attention heads
-- **Other settings**: Weight decay 1e-5, max gradient norm 0.1, dropout 0.0
-
-**Configuration:**
-
-You can customize the transolver_optionC parameters by editing `Models/run_all_experiments.sh`:
-- `N_EPOCHS_OPTIONC`, `LR_INIT_OPTIONC`, `LR_DECAY_OPTIONC`: Training parameters
-- `N_LAYERS_OPTIONC`, `N_HIDDEN_OPTIONC`, `N_HEADS_OPTIONC`: Architecture parameters
-- `SLICE_NUM_OPTIONC`, `MLP_RATIO_OPTIONC`, `DROPOUT_OPTIONC`: Model-specific parameters
 
 ### Running a Single Experiment
 
@@ -193,7 +178,7 @@ docker run --rm --gpus all \
 
 **Required:**
 - `--model_type`: Model architecture (`baseline`, `transolver_optionA`, `transolver_optionB`, `transolver_optionC`)
-- `--prediction`: Prediction target (`eccentricity`, `polarAngle`)
+- `--prediction`: Prediction target (`eccentricity`, `polarAngle`, `pRFsize`)
 - `--hemisphere`: Hemisphere (`Left`, `Right`)
 
 **Optional:**
