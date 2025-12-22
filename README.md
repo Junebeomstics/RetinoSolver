@@ -7,7 +7,7 @@ This repository extends and improves upon the original [deepRetinotopy repositor
 ## Table of Contents
 * [Quick Start with Docker](#quick-start-with-docker)
 * [Running Experiments](#running-experiments)
-* [Manuscript](#manuscript)
+* [Running Inference on FreeSurfer Data](#running-inference-on-freesurfer-data)
 * [Models](#models)
 * [Retinotopy](#retinotopy)
 * [Citation](#citation)
@@ -247,9 +247,85 @@ Models/output_wandb/
 - **Best test results** (`*_best_test_results.pt`): Test set evaluation results using the best model (contains predictions, ground truth, R2 values, and MAE metrics)
 - **Final test results** (`*_final_test_results.pt`): Test set evaluation results using the final model
 
-## Manuscript
+## Running Inference on FreeSurfer Data
 
-This folder contains all source code necessary to reproduce all figures and summary statistics in our manuscript.
+This repository provides a pipeline to run inference on new subjects with FreeSurfer-processed data. The `run_from_freesurfer` directory contains scripts for processing FreeSurfer outputs and generating retinotopic predictions.
+
+### Overview
+
+The FreeSurfer inference pipeline consists of three main steps:
+
+1. **Native to fsaverage conversion**: Converts FreeSurfer native surface data to fsaverage space (standard template space used for training)
+2. **Inference**: Runs the trained model to generate retinotopic predictions in fsaverage space
+3. **Fsaverage to native conversion**: Converts predictions back to the subject's native space
+
+### Prerequisites
+
+- FreeSurfer-processed subject data (with `surf/` directory containing surface files)
+- Trained model checkpoint (from the training experiments)
+- Docker (same image used for training)
+
+### Running the Pipeline
+
+The main script `run_from_freesurfer/run_deepRetinotopy_freesurfer_with_docker.sh` handles the complete pipeline:
+
+```bash
+cd run_from_freesurfer
+chmod +x run_deepRetinotopy_freesurfer_with_docker.sh
+
+./run_deepRetinotopy_freesurfer_with_docker.sh \
+  --freesurfer_dir /path/to/freesurfer/subject/directory \
+  --subject_id SUBJECT_ID \
+  --hemisphere lh \
+  --model_type baseline \
+  --prediction eccentricity \
+  --checkpoint /path/to/checkpoint.pt
+```
+
+### Required Arguments
+
+- `--freesurfer_dir`: Path to FreeSurfer subject directory (should contain `surf/` directory)
+- `--subject_id`: Subject identifier
+- `--hemisphere`: Hemisphere (`lh` or `rh`)
+- `--model_type`: Model architecture (`baseline`, `transolver_optionA`, `transolver_optionB`, `transolver_optionC`)
+- `--prediction`: Prediction target (`eccentricity`, `polarAngle`, `pRFsize`)
+
+### Optional Arguments
+
+- `--checkpoint`: Path to model checkpoint file (if not provided, script will search for best checkpoint automatically)
+- `--myelination`: Use myelination features (`True` or `False`, default: `False`)
+- `--output_dir`: Output directory for results (default: same as `freesurfer_dir`)
+- `--skip_preprocessing`: Skip native to fsaverage conversion (if already done)
+- `--skip_native_conversion`: Skip fsaverage to native conversion
+- `--skip_myelin`: Skip myelin map generation
+
+### Automatic Checkpoint Detection
+
+If `--checkpoint` is not specified, the script automatically searches for the best checkpoint based on:
+- Model type (`--model_type`)
+- Prediction target (`--prediction`)
+- Hemisphere (`--hemisphere`)
+- Myelination setting (`--myelination`)
+
+The search pattern is: `Models/output_wandb/{prediction}_{hemisphere}_{model_type}[_noMyelin]/{prediction_short}_{hemisphere}_{model_type}[_noMyelin]_best_model_epoch*.pt`
+
+### Output
+
+The pipeline generates retinotopic predictions in both fsaverage and native spaces:
+- **Fsaverage space**: Predictions aligned with the training data template
+- **Native space**: Predictions mapped back to the subject's individual anatomy
+
+Results are saved in the specified output directory (or `freesurfer_dir` if not specified) as GIFTI surface files (`.func.gii`).
+
+### Additional Scripts
+
+The `run_from_freesurfer` directory also contains helper scripts:
+- `0_generate_myelin.sh`: Generate myelin maps from FreeSurfer data
+- `1_native2fsaverage.sh`: Convert native surfaces to fsaverage space
+- `2_fsaverage2native.sh`: Convert fsaverage predictions back to native space
+- `midthickness_surf.py`: Generate midthickness surfaces
+
+These scripts are automatically called by the main pipeline script and can also be used independently if needed.
 
 ## Models
 
