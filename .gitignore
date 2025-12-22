@@ -142,11 +142,13 @@ cython_debug/
 # Input directories
 HCP_freesurfer/
 HCP_prf/
+Transolver/
 
 # Output directories
 Models/output/
 Models/.neptune/
 Manuscript/plots/*/output/
+Manuscript/testset_results/
 Retinotopy/data/processed_old2/
 Retinotopy/data/processed_orig/
 Models/wandb/
@@ -162,6 +164,7 @@ Models/output_*
 # Large data files
 *.mat
 Retinotopy/data/raw/converted/
+Retinotopy/data/raw/surfaces/
 
 # Large notebooks (with outputs)
 visualize_output_pRF.ipynb
