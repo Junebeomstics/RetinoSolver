@@ -16,20 +16,68 @@ USE_GPU=${USE_GPU:-"true"}  # Set to "false" to disable GPU
 # Default parameters
 BATCH_SIZE=1
 N_EXAMPLES=181
-OUTPUT_DIR="./output"
+OUTPUT_DIR="./output_wandb"
 MYELINATION=${MYELINATION:-"True"}  # Set to "True" or "False"
 
 # Default checkpoint base directory (Docker environment)
-DEFAULT_CHECKPOINT_BASE="/mnt/scratch/junb/deepRetinotopy/Models/output"
-CONTAINER_CHECKPOINT_BASE="/workspace/Models/output"
+# Normalize OUTPUT_DIR (remove ./ prefix if present)
+OUTPUT_DIR_NORMALIZED="${OUTPUT_DIR#./}"
+DEFAULT_CHECKPOINT_BASE="/mnt/scratch/junb/deepRetinotopy/Models/$OUTPUT_DIR_NORMALIZED"
+CONTAINER_CHECKPOINT_BASE="/workspace/Models/$OUTPUT_DIR_NORMALIZED"
 
-# Checkpoint path (required)
-CHECKPOINT_PATH=${CHECKPOINT_PATH:-"RET-45/transolver_optionA_ecc_Left_best_model_epoch115.pt"}
 
 # Model configuration (required if not in checkpoint metadata)
-MODEL_TYPE=${MODEL_TYPE:-"transolver_optionA"}  # baseline, transolver_optionA, transolver_optionB, transolver_optionC
-PREDICTION=${PREDICTION:-"eccentricity"}  # eccentricity, polarAngle
-HEMISPHERE=${HEMISPHERE:-"Left"}  # Left, Right
+# Define all combinations to test
+PREDICTIONS=("eccentricity" "polarAngle" "pRFsize")  # eccentricity, polarAngle, pRFsize
+HEMISPHERES=("Left" "Right")  # Left, Right
+MODEL_TYPES=("baseline" "transolver_optionA" "transolver_optionB")  # baseline, transolver_optionA, transolver_optionB, transolver_optionC
+
+# Default values (used if not running in loop mode)
+PREDICTION=${PREDICTION:-"eccentricity"}
+HEMISPHERE=${HEMISPHERE:-"Left"}
+MODEL_TYPE=${MODEL_TYPE:-"transolver_optionA"}
+
+# Flag to enable/disable loop mode (set RUN_ALL=true to run all combinations)
+RUN_ALL=${RUN_ALL:-"false"}
+
+# Function to determine prediction suffix
+get_pred_suffix() {
+    local pred=$1
+    case "$pred" in
+        eccentricity)
+            echo "ecc"
+            ;;
+        polarAngle)
+            echo "PA"
+            ;;
+        pRFsize)
+            echo "size"
+            ;;
+        *)
+            echo "Unknown PREDICTION: $pred" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Function to get checkpoint path for given parameters
+get_checkpoint_path() {
+    local pred=$1
+    local hemi=$2
+    local model=$3
+    local myel=$4
+    local pred_suffix=$(get_pred_suffix "$pred")
+    
+    if [[ "$myel" == "False" ]]; then
+        echo "${DEFAULT_CHECKPOINT_BASE}/${pred}_${hemi}_${model}_noMyelin/${pred_suffix}_${hemi}_${model}_noMyelin_best_model_epoch*.pt"
+    else
+        echo "${DEFAULT_CHECKPOINT_BASE}/${pred}_${hemi}_${model}/${pred_suffix}_${hemi}_${model}_best_model_epoch*.pt"
+    fi
+}
+
+# Checkpoint path (required) - will be set per iteration if RUN_ALL=true
+CHECKPOINT_PATH=${CHECKPOINT_PATH:-""}
+
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -70,22 +118,27 @@ while [[ $# -gt 0 ]]; do
             USE_GPU="$2"
             shift 2
             ;;
+        --run_all)
+            RUN_ALL="true"
+            shift
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --checkpoint_path PATH    Path to checkpoint file (.pt) [REQUIRED]"
+            echo "  --checkpoint_path PATH    Path to checkpoint file (.pt) [REQUIRED if not using --run_all]"
             echo "  --model_type TYPE         Model type: baseline, transolver_optionA, transolver_optionB, transolver_optionC"
-            echo "  --prediction TYPE         Prediction type: eccentricity, polarAngle"
+            echo "  --prediction TYPE         Prediction type: eccentricity, polarAngle, pRFsize"
             echo "  --hemisphere HEMI         Hemisphere: Left, Right"
             echo "  --n_examples NUM          Number of examples (default: 181)"
             echo "  --myelination BOOL        Use myelination: True, False (default: True)"
-            echo "  --output_dir DIR          Output directory (default: ./output)"
+            echo "  --output_dir DIR          Output directory (default: ./output_wandb)"
             echo "  --docker_image IMAGE      Docker image name (default: vnmd/deepretinotopy_1.0.18:latest)"
             echo "  --use_gpu BOOL            Use GPU: true, false (default: true)"
+            echo "  --run_all                Run all combinations of PREDICTION, HEMISPHERE, MODEL_TYPE"
             echo ""
             echo "Environment variables can also be used:"
-            echo "  CHECKPOINT_PATH, MODEL_TYPE, PREDICTION, HEMISPHERE, etc."
+            echo "  CHECKPOINT_PATH, MODEL_TYPE, PREDICTION, HEMISPHERE, RUN_ALL, etc."
             exit 0
             ;;
         *)
@@ -96,24 +149,100 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Check if checkpoint path is provided
-if [ -z "$CHECKPOINT_PATH" ]; then
-    echo "Error: --checkpoint_path is required"
-    echo "Use --help for usage information"
-    exit 1
-fi
+# Update checkpoint base paths after parsing arguments (in case OUTPUT_DIR was changed)
+OUTPUT_DIR_NORMALIZED="${OUTPUT_DIR#./}"
+DEFAULT_CHECKPOINT_BASE="/mnt/scratch/junb/deepRetinotopy/Models/$OUTPUT_DIR_NORMALIZED"
+CONTAINER_CHECKPOINT_BASE="/workspace/Models/$OUTPUT_DIR_NORMALIZED"
 
-# Prepend default checkpoint base if checkpoint path is relative or just filename
-if [[ "$CHECKPOINT_PATH" != /* ]]; then
-    # Relative path or filename - prepend default base directory
-    CHECKPOINT_PATH="$DEFAULT_CHECKPOINT_BASE/$CHECKPOINT_PATH"
-    echo "Using default checkpoint base directory: $CHECKPOINT_PATH"
-fi
+# Function to run test inference for a single configuration
+run_single_test() {
+    local pred=$1
+    local hemi=$2
+    local model=$3
+    local checkpoint_path=$4
+    
+    echo ""
+    echo "=========================================="
+    echo "Running test set inference:"
+    echo "  Checkpoint: $checkpoint_path"
+    echo "  Model: $model"
+    echo "  Prediction: $pred"
+    echo "  Hemisphere: $hemi"
+    echo "  Myelination: $MYELINATION"
+    echo "=========================================="
+    
+    # Convert checkpoint path to container path
+    local container_checkpoint_path
+    if [[ "$checkpoint_path" == "$DEFAULT_CHECKPOINT_BASE"* ]]; then
+        # Convert default base to container base
+        container_checkpoint_path="${checkpoint_path/$DEFAULT_CHECKPOINT_BASE/$CONTAINER_CHECKPOINT_BASE}"
+    elif [[ "$checkpoint_path" == "$PROJECT_ROOT"* ]]; then
+        # Convert project root path to container path
+        container_checkpoint_path="/workspace${checkpoint_path#$PROJECT_ROOT}"
+    elif [[ "$checkpoint_path" == /* ]]; then
+        # Absolute path - assume it's already a container path or use as is
+        container_checkpoint_path="$checkpoint_path"
+    else
+        # Relative path - assume relative to /workspace
+        container_checkpoint_path="/workspace/$checkpoint_path"
+    fi
+    
+    echo "  Host checkpoint path: $checkpoint_path"
+    echo "  Container checkpoint path: $container_checkpoint_path"
+    
+    # Build Python command
+    local python_cmd="cd Models && python train_unified.py \
+        --checkpoint_path $container_checkpoint_path \
+        --run_test True \
+        --model_type $model \
+        --prediction $pred \
+        --hemisphere $hemi \
+        --n_examples $N_EXAMPLES \
+        --myelination $MYELINATION \
+        --output_dir $OUTPUT_DIR \
+        --batch_size $BATCH_SIZE"
+    
+    # Run the command in Docker container
+    echo "Executing test inference..."
+    docker exec "$CONTAINER_NAME" bash -c "$python_cmd"
+    
+    local exit_code=$?
+    if [ $exit_code -eq 0 ]; then
+        echo ""
+        echo "=========================================="
+        echo "✓ Test inference completed successfully"
+        echo "  Model: $model, Prediction: $pred, Hemisphere: $hemi"
+        echo "=========================================="
+    else
+        echo ""
+        echo "=========================================="
+        echo "✗ Test inference failed"
+        echo "  Model: $model, Prediction: $pred, Hemisphere: $hemi"
+        echo "=========================================="
+    fi
+    
+    return $exit_code
+}
 
-# Check if checkpoint file exists (if it's an absolute path or relative to project root)
-if [ ! -f "$CHECKPOINT_PATH" ] && [ ! -f "$PROJECT_ROOT/$CHECKPOINT_PATH" ]; then
-    echo "Warning: Checkpoint file not found at: $CHECKPOINT_PATH"
-    echo "Will try to load from Docker container path"
+# Check if checkpoint path is provided (only if not running all combinations)
+if [[ "$RUN_ALL" != "true" ]]; then
+    if [ -z "$CHECKPOINT_PATH" ]; then
+        # Try to generate default checkpoint path
+        CHECKPOINT_PATH=$(get_checkpoint_path "$PREDICTION" "$HEMISPHERE" "$MODEL_TYPE" "$MYELINATION")
+    fi
+    
+    # Prepend default checkpoint base if checkpoint path is relative or just filename
+    if [[ "$CHECKPOINT_PATH" != /* ]]; then
+        # Relative path or filename - prepend default base directory
+        CHECKPOINT_PATH="$DEFAULT_CHECKPOINT_BASE/$CHECKPOINT_PATH"
+        echo "Using default checkpoint base directory: $CHECKPOINT_PATH"
+    fi
+    
+    # Check if checkpoint file exists (if it's an absolute path or relative to project root)
+    if [ ! -f "$CHECKPOINT_PATH" ] && [ ! -f "$PROJECT_ROOT/$CHECKPOINT_PATH" ]; then
+        echo "Warning: Checkpoint file not found at: $CHECKPOINT_PATH"
+        echo "Will try to load from Docker container path"
+    fi
 fi
 
 # Check if Docker is available
@@ -167,58 +296,75 @@ if [ $? -ne 0 ]; then
     echo "Warning: Failed to install packages. Continuing anyway..."
 fi
 
-# Build Python command for test-only inference
-echo "=========================================="
-echo "Running test set inference:"
-echo "  Checkpoint: $CHECKPOINT_PATH"
-echo "  Model: $MODEL_TYPE"
-echo "  Prediction: $PREDICTION"
-echo "  Hemisphere: $HEMISPHERE"
-echo "=========================================="
-
-# Convert checkpoint path to container path
-# Check if it's the default checkpoint base path
-if [[ "$CHECKPOINT_PATH" == "$DEFAULT_CHECKPOINT_BASE"* ]]; then
-    # Convert default base to container base
-    CONTAINER_CHECKPOINT_PATH="${CHECKPOINT_PATH/$DEFAULT_CHECKPOINT_BASE/$CONTAINER_CHECKPOINT_BASE}"
-elif [[ "$CHECKPOINT_PATH" == "$PROJECT_ROOT"* ]]; then
-    # Convert project root path to container path
-    CONTAINER_CHECKPOINT_PATH="/workspace${CHECKPOINT_PATH#$PROJECT_ROOT}"
-elif [[ "$CHECKPOINT_PATH" == /* ]]; then
-    # Absolute path - assume it's already a container path or use as is
-    CONTAINER_CHECKPOINT_PATH="$CHECKPOINT_PATH"
-else
-    # Relative path - assume relative to /workspace
-    CONTAINER_CHECKPOINT_PATH="/workspace/$CHECKPOINT_PATH"
-fi
-
-# Build Python command
-PYTHON_CMD="cd Models && python train_unified.py \
-    --checkpoint_path $CONTAINER_CHECKPOINT_PATH \
-    --run_test True \
-    --model_type $MODEL_TYPE \
-    --prediction $PREDICTION \
-    --hemisphere $HEMISPHERE \
-    --n_examples $N_EXAMPLES \
-    --myelination $MYELINATION \
-    --output_dir $OUTPUT_DIR \
-    --batch_size $BATCH_SIZE"
-
-# Run the command in Docker container
-echo "Executing test inference..."
-docker exec "$CONTAINER_NAME" bash -c "$PYTHON_CMD"
-
-if [ $? -eq 0 ]; then
+# Run test inference
+if [[ "$RUN_ALL" == "true" ]]; then
+    # Run all combinations
+    echo "=========================================="
+    echo "Running test inference for all combinations"
+    echo "  Predictions: ${PREDICTIONS[@]}"
+    echo "  Hemispheres: ${HEMISPHERES[@]}"
+    echo "  Model Types: ${MODEL_TYPES[@]}"
+    echo "  Myelination: $MYELINATION"
+    echo "=========================================="
+    
+    total_combinations=$((${#PREDICTIONS[@]} * ${#HEMISPHERES[@]} * ${#MODEL_TYPES[@]}))
+    current=0
+    success_count=0
+    fail_count=0
+    
+    for PREDICTION in "${PREDICTIONS[@]}"; do
+        for HEMISPHERE in "${HEMISPHERES[@]}"; do
+            for MODEL_TYPE in "${MODEL_TYPES[@]}"; do
+                current=$((current + 1))
+                echo ""
+                echo "[$current/$total_combinations] Processing: $MODEL_TYPE - $PREDICTION - $HEMISPHERE"
+                
+                # Get checkpoint path for this combination
+                CHECKPOINT_PATH=$(get_checkpoint_path "$PREDICTION" "$HEMISPHERE" "$MODEL_TYPE" "$MYELINATION")
+                
+                # Check if checkpoint file exists (use first match if wildcard)
+                if [[ "$CHECKPOINT_PATH" == *"*"* ]]; then
+                    # Expand wildcard and take first match
+                    CHECKPOINT_PATH=$(ls $CHECKPOINT_PATH 2>/dev/null | head -1)
+                fi
+                
+                echo "  Checkpoint path: $CHECKPOINT_PATH"
+                
+                if [ -z "$CHECKPOINT_PATH" ] || [ ! -f "$CHECKPOINT_PATH" ]; then
+                    echo "  ⚠ Skipping: Checkpoint not found for $MODEL_TYPE - $PREDICTION - $HEMISPHERE"
+                    echo "    Expected path: $(get_checkpoint_path "$PREDICTION" "$HEMISPHERE" "$MODEL_TYPE" "$MYELINATION")"
+                    fail_count=$((fail_count + 1))
+                    continue
+                fi
+                
+                # Run test inference
+                if run_single_test "$PREDICTION" "$HEMISPHERE" "$MODEL_TYPE" "$CHECKPOINT_PATH"; then
+                    success_count=$((success_count + 1))
+                else
+                    fail_count=$((fail_count + 1))
+                fi
+            done
+        done
+    done
+    
     echo ""
     echo "=========================================="
-    echo "✓ Test inference completed successfully"
+    echo "Summary:"
+    echo "  Total combinations: $total_combinations"
+    echo "  Successful: $success_count"
+    echo "  Failed/Skipped: $fail_count"
     echo "=========================================="
+    
+    if [ $fail_count -gt 0 ]; then
+        exit 1
+    fi
 else
-    echo ""
-    echo "=========================================="
-    echo "✗ Test inference failed"
-    echo "=========================================="
-    exit 1
+    # Run single configuration
+    run_single_test "$PREDICTION" "$HEMISPHERE" "$MODEL_TYPE" "$CHECKPOINT_PATH"
+    
+    if [ $? -ne 0 ]; then
+        exit 1
+    fi
 fi
 
 echo ""

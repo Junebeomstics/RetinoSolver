@@ -78,7 +78,7 @@ class Retinotopy(InMemoryDataset):
                 else:
                     return [
                         'training_pRFsize_LH_myelincurv_ROI.pt',
-                        'development_pRFsize__LH_myelincurv_ROI.pt',
+                        'development_pRFsize_LH_myelincurv_ROI.pt',
                         'test_pRFsize_LH_myelincurv_ROI.pt']
             else:
                 if self.prediction == 'eccentricity':

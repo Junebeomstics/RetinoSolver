@@ -39,3 +39,6 @@ requests>=2.31.0
 packaging>=23.0
 setuptools>=68.0.0
 wheel>=0.40.0
+
+# Fourier Neural Operator
+neuraloperator>=0.1.0
