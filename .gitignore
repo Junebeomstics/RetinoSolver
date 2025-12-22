@@ -139,12 +139,18 @@ cython_debug/
 .vscode/
 
 # Project specific
+# Input directories
+HCP_freesurfer/
+HCP_prf/
+
 # Output directories
 Models/output/
 Models/.neptune/
 Manuscript/plots/*/output/
 Retinotopy/data/processed_old2/
 Retinotopy/data/processed_orig/
+Models/wandb/
+Models/output_*
 
 # Large data files (should be downloaded separately)
 *.dscalar.nii
