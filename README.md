@@ -390,6 +390,11 @@ For questions and inquiries about this repository, please contact:
 
 Junbeom Kwon <[kjb961013@gmail.com](mailto:kjb961013@gmail.com)>
 
+**Contributors:**
+- Sanga Lee (PhD Student, Boston University)
+- Satvik Agarwal (Undergraduate Intern, University of Texas at Austin)
+- Gabriele Amorosino (Postdoc, University of Texas at Austin)
+
 **Original Authors:**
 - Fernanda Ribeiro <[fernanda.ribeiro@uq.edu.au](mailto:fernanda.ribeiro@uq.edu.au)>
 - Alex Puckett <[a.puckett@uq.edu.au](mailto:a.puckett@uq.edu.au)>
