@@ -1,0 +1,328 @@
+#!/bin/bash
+#PBS -l nodes=1:ppn=8,walltime=3:00:00
+#PBS -N app-deepRetinotopy
+#PBS -V
+set -xe
+
+# Brainlife app for deepRetinotopy inference pipeline
+# Based on run_deepRetinotopy_freesurfer_with_docker.sh
+# Uses Singularity instead of Docker for brainlife compatibility
+
+# Read configuration from config.json
+FREESURFER_DIR=$(jq -r '.freesurfer_dir' config.json)
+MODEL_TYPE=$(jq -r '.model_type' config.json)
+PREDICTION=$(jq -r '.prediction_target' config.json)
+MYELINATION=$(jq -r '.myelination' config.json)
+
+# Validate required parameters
+if [ -z "$FREESURFER_DIR" ] || [ "$FREESURFER_DIR" == "null" ]; then
+    echo "ERROR: freesurfer_dir is required in config.json"
+    exit 1
+fi
+
+if [ -z "$MODEL_TYPE" ] || [ "$MODEL_TYPE" == "null" ]; then
+    echo "ERROR: model_type is required in config.json"
+    exit 1
+fi
+
+if [ -z "$PREDICTION" ] || [ "$PREDICTION" == "null" ]; then
+    echo "ERROR: prediction_target is required in config.json"
+    exit 1
+fi
+
+if [ -z "$MYELINATION" ] || [ "$MYELINATION" == "null" ]; then
+    MYELINATION="False"
+fi
+
+# Set base directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+cd "$PROJECT_ROOT"
+
+# Singularity settings
+SINGULARITY_IMAGE=${SINGULARITY_IMAGE:-"docker://vnmd/deepretinotopy_1.0.18:latest"}
+
+# Default parameters
+HCP_SURFACE_DIR="surface"
+N_JOBS=$(($(nproc) - 1))
+[ $N_JOBS -lt 1 ] && N_JOBS=1
+
+# Convert FREESURFER_DIR to absolute path
+FREESURFER_DIR_ABS=$(realpath "$FREESURFER_DIR" 2>/dev/null || echo "$FREESURFER_DIR")
+if [ ! -d "$FREESURFER_DIR_ABS" ]; then
+    echo "ERROR: FreeSurfer directory not found: $FREESURFER_DIR"
+    exit 1
+fi
+
+# Determine if FREESURFER_DIR is a subject directory or subjects directory
+# Check if it has a 'surf' subdirectory (subject directory) or contains subject directories
+SUBJECT_ID=""
+if [ -d "$FREESURFER_DIR_ABS/surf" ]; then
+    # This is a subject directory
+    SUBJECT_ID=$(basename "$FREESURFER_DIR_ABS")
+    FREESURFER_SUBJECTS_DIR=$(dirname "$FREESURFER_DIR_ABS")
+else
+    # This is a subjects directory, need to find subject
+    # For brainlife, we assume there's one subject
+    for item in "$FREESURFER_DIR_ABS"/*; do
+        if [ -d "$item" ] && [ -d "$item/surf" ] && [ "$(basename "$item")" != "fsaverage" ]; then
+            SUBJECT_ID=$(basename "$item")
+            break
+        fi
+    done
+    if [ -z "$SUBJECT_ID" ]; then
+        echo "ERROR: Could not find subject directory in $FREESURFER_DIR_ABS"
+        exit 1
+    fi
+    FREESURFER_SUBJECTS_DIR="$FREESURFER_DIR_ABS"
+fi
+
+echo "Detected subject ID: $SUBJECT_ID"
+echo "FreeSurfer subjects directory: $FREESURFER_SUBJECTS_DIR"
+
+# Map hemisphere names
+map_hemisphere() {
+    local hemi=$1
+    if [[ "${hemi,,}" == "lh" ]]; then
+        echo "Left"
+    elif [[ "${hemi,,}" == "rh" ]]; then
+        echo "Right"
+    else
+        echo "${hemi}"
+    fi
+}
+
+# Compose directory and filename patterns for checkpoint search
+if [[ "${MYELINATION,,}" == "true" || "${MYELINATION}" == "True" || "${MYELINATION}" == "1" ]]; then
+    NO_MYELIN_SUFFIX=""
+else
+    NO_MYELIN_SUFFIX="_noMyelin"
+fi
+
+# Convert to short name for prediction
+if [[ "${PREDICTION}" == "eccentricity" ]]; then
+    PRED_SHORT="ecc"
+elif [[ "${PREDICTION}" == "polarAngle" ]]; then
+    PRED_SHORT="PA"
+elif [[ "${PREDICTION}" == "pRFsize" ]]; then
+    PRED_SHORT="size"
+else
+    PRED_SHORT="${PREDICTION}"
+fi
+
+# Determine model name for file matching
+MODEL_NAME="model"
+if [ "$MODEL_TYPE" != "baseline" ]; then
+    MODEL_NAME="$MODEL_TYPE"
+fi
+
+# Create output directories
+OUTPUT_DIR_FSLR="output_prf_fslr"
+OUTPUT_DIR_NATIVE="output_prf_native"
+mkdir -p "$OUTPUT_DIR_FSLR"
+mkdir -p "$OUTPUT_DIR_NATIVE"
+
+# Process both hemispheres
+for HEMISPHERE in lh rh; do
+    echo ""
+    echo "==============================================="
+    echo "Processing Hemisphere: $HEMISPHERE"
+    echo "==============================================="
+    
+    HEMISPHERE_LONG=$(map_hemisphere "$HEMISPHERE")
+    HEMI_CHECK="$HEMISPHERE_LONG"
+    
+    # Find checkpoint based on MODEL_TYPE, PREDICTION, HEMISPHERE, MYELINATION
+    DIRNAME="Models/output_wandb/${PREDICTION}_${HEMI_CHECK}_${MODEL_TYPE}${NO_MYELIN_SUFFIX}"
+    FILENAME="${PRED_SHORT}_${HEMI_CHECK}_${MODEL_TYPE}${NO_MYELIN_SUFFIX}_best_model_epoch*.pt"
+    CHECKPOINT_SEARCH="${DIRNAME}/${FILENAME}"
+    
+    CHECKPOINT_PATH=$(ls -1 ${CHECKPOINT_SEARCH} 2>/dev/null | sort -V | tail -n 1)
+    
+    if [[ -z "$CHECKPOINT_PATH" ]]; then
+        echo "Error: No checkpoint file found with pattern: ${CHECKPOINT_SEARCH}"
+        exit 1
+    fi
+    
+    echo "Using checkpoint: $CHECKPOINT_PATH"
+    
+    # Determine myelination suffix for filenames
+    if [[ "${MYELINATION,,}" == "true" || "${MYELINATION}" == "True" || "${MYELINATION}" == "1" ]]; then
+        MYELIN_SUFFIX="_myelin"
+    else
+        MYELIN_SUFFIX=""
+    fi
+    
+    # Determine model suffix for filenames
+    if [ "$MODEL_TYPE" != "baseline" ]; then
+        MODEL_SUFFIX="_${MODEL_TYPE}"
+    else
+        MODEL_SUFFIX=""
+    fi
+    
+    # Build paths for container
+    # Use subjects directory for freesurfer_dir parameter
+    FREESURFER_DIR_FOR_CMD="$FREESURFER_SUBJECTS_DIR"
+    CHECKPOINT_PATH_FOR_CMD="$(realpath "$CHECKPOINT_PATH" 2>/dev/null || echo "$CHECKPOINT_PATH")"
+    HCP_SURFACE_DIR_FOR_CMD="$(realpath "$HCP_SURFACE_DIR" 2>/dev/null || echo "$HCP_SURFACE_DIR")"
+    OUTPUT_DIR_FOR_CMD="$(realpath "$PROJECT_ROOT" 2>/dev/null || echo "$PROJECT_ROOT")"
+    
+    # Step 1: Native to fsaverage conversion
+    echo ""
+    echo "[Step 1] Native to fsaverage Conversion"
+    echo "==============================================="
+    
+    STEP1_CMD="cd /workspace/run_from_freesurfer && ./1_native2fsaverage.sh"
+    STEP1_CMD="$STEP1_CMD -s /mnt/freesurfer"
+    STEP1_CMD="$STEP1_CMD -t /mnt/hcp_surface"
+    STEP1_CMD="$STEP1_CMD -h $HEMISPHERE"
+    STEP1_CMD="$STEP1_CMD -j $N_JOBS"
+    STEP1_CMD="$STEP1_CMD -i $SUBJECT_ID"
+    STEP1_CMD="$STEP1_CMD -o /workspace"
+    
+    singularity exec -e \
+        -B "$PROJECT_ROOT:/workspace" \
+        -B "$FREESURFER_SUBJECTS_DIR:/mnt/freesurfer" \
+        -B "$(dirname "$CHECKPOINT_PATH_FOR_CMD"):/mnt/checkpoint" \
+        -B "$HCP_SURFACE_DIR_FOR_CMD:/mnt/hcp_surface" \
+        "$SINGULARITY_IMAGE" \
+        bash -c "$STEP1_CMD"
+    
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Native to fsaverage conversion failed"
+        exit 1
+    fi
+    
+    echo "[Step 1] Completed!"
+    
+    # Step 2: Inference
+    echo ""
+    echo "[Step 2] Running Inference"
+    echo "==============================================="
+    
+    STEP2_CMD="python /workspace/Models/run_inference_freesurfer.py"
+    STEP2_CMD="$STEP2_CMD --freesurfer_dir /mnt/freesurfer"
+    # Convert checkpoint path for container
+    CHECKPOINT_BASENAME=$(basename "$CHECKPOINT_PATH_FOR_CMD")
+    CHECKPOINT_DIR=$(dirname "$CHECKPOINT_PATH_FOR_CMD")
+    CHECKPOINT_PATH_CONTAINER="/mnt/checkpoint/$CHECKPOINT_BASENAME"
+    
+    STEP2_CMD="$STEP2_CMD --checkpoint_path $CHECKPOINT_PATH_CONTAINER"
+    STEP2_CMD="$STEP2_CMD --model_type $MODEL_TYPE"
+    STEP2_CMD="$STEP2_CMD --prediction $PREDICTION"
+    STEP2_CMD="$STEP2_CMD --hemisphere $HEMISPHERE_LONG"
+    STEP2_CMD="$STEP2_CMD --myelination $MYELINATION"
+    STEP2_CMD="$STEP2_CMD --subject_id $SUBJECT_ID"
+    STEP2_CMD="$STEP2_CMD --output_dir /workspace"
+    
+    singularity exec -e \
+        -B "$PROJECT_ROOT:/workspace" \
+        -B "$FREESURFER_SUBJECTS_DIR:/mnt/freesurfer" \
+        -B "$(dirname "$CHECKPOINT_PATH_FOR_CMD"):/mnt/checkpoint" \
+        -B "$HCP_SURFACE_DIR_FOR_CMD:/mnt/hcp_surface" \
+        "$SINGULARITY_IMAGE" \
+        bash -c "$STEP2_CMD"
+    
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Inference failed"
+        exit 1
+    fi
+    
+    echo "[Step 2] Completed!"
+    
+    # Step 3: Fsaverage to native conversion
+    echo ""
+    echo "[Step 3] Fsaverage to Native Space Conversion"
+    echo "==============================================="
+    
+    STEP3_CMD="cd /workspace/run_from_freesurfer && ./2_fsaverage2native.sh"
+    STEP3_CMD="$STEP3_CMD -s /mnt/freesurfer"
+    STEP3_CMD="$STEP3_CMD -t /mnt/hcp_surface"
+    STEP3_CMD="$STEP3_CMD -h $HEMISPHERE"
+    STEP3_CMD="$STEP3_CMD -r $PREDICTION"
+    STEP3_CMD="$STEP3_CMD -m $MODEL_TYPE"
+    STEP3_CMD="$STEP3_CMD -y $MYELINATION"
+    STEP3_CMD="$STEP3_CMD -j $N_JOBS"
+    STEP3_CMD="$STEP3_CMD -i $SUBJECT_ID"
+    STEP3_CMD="$STEP3_CMD -o /workspace"
+    
+    singularity exec -e \
+        -B "$PROJECT_ROOT:/workspace" \
+        -B "$FREESURFER_SUBJECTS_DIR:/mnt/freesurfer" \
+        -B "$(dirname "$CHECKPOINT_PATH_FOR_CMD"):/mnt/checkpoint" \
+        -B "$HCP_SURFACE_DIR_FOR_CMD:/mnt/hcp_surface" \
+        "$SINGULARITY_IMAGE" \
+        bash -c "$STEP3_CMD"
+    
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Fsaverage to native conversion failed"
+        exit 1
+    fi
+    
+    echo "[Step 3] Completed!"
+    
+    # Find and copy output files to new directories with renamed files
+    # Find fsaverage space output file (from Step 2)
+    # Output is saved in: $OUTPUT_DIR/$SUBJECT_ID/deepRetinotopy/$FILENAME
+    FSLR_OUTPUT_PATTERN="${SUBJECT_ID}.predicted_${PREDICTION}_${HEMISPHERE}${MYELIN_SUFFIX}${MODEL_SUFFIX}.func.gii"
+    FSLR_OUTPUT_FILE="$PROJECT_ROOT/$SUBJECT_ID/deepRetinotopy/$FSLR_OUTPUT_PATTERN"
+    
+    if [ -f "$FSLR_OUTPUT_FILE" ]; then
+        # Copy to output_prf_fslr with renamed file
+        if [ "$HEMISPHERE" == "lh" ]; then
+            cp "$FSLR_OUTPUT_FILE" "$OUTPUT_DIR_FSLR/left.gii"
+            echo "Copied fsaverage space file to $OUTPUT_DIR_FSLR/left.gii"
+        else
+            cp "$FSLR_OUTPUT_FILE" "$OUTPUT_DIR_FSLR/right.gii"
+            echo "Copied fsaverage space file to $OUTPUT_DIR_FSLR/right.gii"
+        fi
+    else
+        echo "WARNING: Could not find fsaverage space output file: $FSLR_OUTPUT_FILE"
+        # Try alternative locations
+        if [ -f "$PROJECT_ROOT/$FSLR_OUTPUT_PATTERN" ]; then
+            if [ "$HEMISPHERE" == "lh" ]; then
+                cp "$PROJECT_ROOT/$FSLR_OUTPUT_PATTERN" "$OUTPUT_DIR_FSLR/left.gii"
+            else
+                cp "$PROJECT_ROOT/$FSLR_OUTPUT_PATTERN" "$OUTPUT_DIR_FSLR/right.gii"
+            fi
+            echo "Found fsaverage space file in alternative location"
+        fi
+    fi
+    
+    # Find native space output file (from Step 3)
+    # Output is saved in: $OUTPUT_DIR/$SUBJECT_ID/deepRetinotopy/$FILENAME
+    NATIVE_OUTPUT_PATTERN="${SUBJECT_ID}.predicted_${PREDICTION}_${MODEL_NAME}.${HEMISPHERE}.native.func.gii"
+    NATIVE_OUTPUT_FILE="$PROJECT_ROOT/$SUBJECT_ID/deepRetinotopy/$NATIVE_OUTPUT_PATTERN"
+    
+    if [ -f "$NATIVE_OUTPUT_FILE" ]; then
+        # Copy to output_prf_native with renamed file
+        if [ "$HEMISPHERE" == "lh" ]; then
+            cp "$NATIVE_OUTPUT_FILE" "$OUTPUT_DIR_NATIVE/left.gii"
+            echo "Copied native space file to $OUTPUT_DIR_NATIVE/left.gii"
+        else
+            cp "$NATIVE_OUTPUT_FILE" "$OUTPUT_DIR_NATIVE/right.gii"
+            echo "Copied native space file to $OUTPUT_DIR_NATIVE/right.gii"
+        fi
+    else
+        echo "WARNING: Could not find native space output file: $NATIVE_OUTPUT_FILE"
+        # Try alternative locations
+        if [ -f "$PROJECT_ROOT/$NATIVE_OUTPUT_PATTERN" ]; then
+            if [ "$HEMISPHERE" == "lh" ]; then
+                cp "$PROJECT_ROOT/$NATIVE_OUTPUT_PATTERN" "$OUTPUT_DIR_NATIVE/left.gii"
+            else
+                cp "$PROJECT_ROOT/$NATIVE_OUTPUT_PATTERN" "$OUTPUT_DIR_NATIVE/right.gii"
+            fi
+            echo "Found native space file in alternative location"
+        fi
+    fi
+    
+    echo "Hemisphere $HEMISPHERE processing completed!"
+done
+
+echo ""
+echo "==============================================="
+echo "Full Pipeline Completed Successfully!"
+echo "==============================================="
+echo "Results are available in:"
+echo "  - FSLR space: $OUTPUT_DIR_FSLR/"
+echo "  - Native space: $OUTPUT_DIR_NATIVE/"
