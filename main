@@ -9,7 +9,7 @@ set -xe
 # Uses Singularity instead of Docker for brainlife compatibility
 
 # Read configuration from config.json
-FREESURFER_DIR=$(jq -r '.freesurfer_dir' config.json)
+FREESURFER_DIR=$(jq -r '.freesurfer' config.json)
 MODEL_TYPE=$(jq -r '.model_type' config.json)
 PREDICTION=$(jq -r '.prediction_target' config.json)
 MYELINATION=$(jq -r '.myelination' config.json)
