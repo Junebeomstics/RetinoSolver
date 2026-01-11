@@ -8,6 +8,18 @@ set -xe
 # Based on run_deepRetinotopy_freesurfer_with_docker.sh
 # Uses Singularity instead of Docker for brainlife compatibility
 
+# Check if jq is available
+if ! command -v jq >/dev/null 2>&1; then
+    echo "ERROR: jq command is required but not found. Please install jq."
+    exit 1
+fi
+
+# Check if config.json exists
+if [ ! -f "config.json" ]; then
+    echo "ERROR: config.json not found in current directory: $(pwd)"
+    exit 1
+fi
+
 # Read configuration from config.json
 FREESURFER_DIR=$(jq -r '.freesurfer' config.json)
 MODEL_TYPE=$(jq -r '.model_type' config.json)
@@ -35,20 +47,40 @@ if [ -z "$MYELINATION" ] || [ "$MYELINATION" == "null" ]; then
 fi
 
 # Set base directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# For brainlife.io, use current working directory if script path resolution fails
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || SCRIPT_DIR="$(pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
-cd "$PROJECT_ROOT"
+# Try to change directory, but don't fail if already there
+cd "$PROJECT_ROOT" 2>/dev/null || true
 
 # Singularity settings
 SINGULARITY_IMAGE=${SINGULARITY_IMAGE:-"docker://vnmd/deepretinotopy_1.0.18:latest"}
 
 # Default parameters
 HCP_SURFACE_DIR="surface"
-N_JOBS=$(($(nproc) - 1))
+# Use nproc if available, otherwise default to 4 (or use environment variable)
+if command -v nproc >/dev/null 2>&1; then
+    N_JOBS=$(($(nproc) - 1))
+else
+    # Fallback: use environment variable or default
+    N_JOBS=${NPROC:-4}
+fi
 [ $N_JOBS -lt 1 ] && N_JOBS=1
 
 # Convert FREESURFER_DIR to absolute path
-FREESURFER_DIR_ABS=$(realpath "$FREESURFER_DIR" 2>/dev/null || echo "$FREESURFER_DIR")
+# Use readlink -f if realpath is not available
+if command -v realpath >/dev/null 2>&1; then
+    FREESURFER_DIR_ABS=$(realpath "$FREESURFER_DIR" 2>/dev/null || echo "$FREESURFER_DIR")
+elif command -v readlink >/dev/null 2>&1; then
+    FREESURFER_DIR_ABS=$(readlink -f "$FREESURFER_DIR" 2>/dev/null || echo "$FREESURFER_DIR")
+else
+    # Fallback: if relative path, make it absolute
+    if [[ "$FREESURFER_DIR" != /* ]]; then
+        FREESURFER_DIR_ABS="$(pwd)/$FREESURFER_DIR"
+    else
+        FREESURFER_DIR_ABS="$FREESURFER_DIR"
+    fi
+fi
 if [ ! -d "$FREESURFER_DIR_ABS" ]; then
     echo "ERROR: FreeSurfer directory not found: $FREESURFER_DIR"
     exit 1
@@ -163,9 +195,29 @@ for HEMISPHERE in lh rh; do
     # Build paths for container
     # Use subjects directory for freesurfer_dir parameter
     FREESURFER_DIR_FOR_CMD="$FREESURFER_SUBJECTS_DIR"
-    CHECKPOINT_PATH_FOR_CMD="$(realpath "$CHECKPOINT_PATH" 2>/dev/null || echo "$CHECKPOINT_PATH")"
-    HCP_SURFACE_DIR_FOR_CMD="$(realpath "$HCP_SURFACE_DIR" 2>/dev/null || echo "$HCP_SURFACE_DIR")"
-    OUTPUT_DIR_FOR_CMD="$(realpath "$PROJECT_ROOT" 2>/dev/null || echo "$PROJECT_ROOT")"
+    # Use readlink -f if realpath is not available
+    if command -v realpath >/dev/null 2>&1; then
+        CHECKPOINT_PATH_FOR_CMD="$(realpath "$CHECKPOINT_PATH" 2>/dev/null || echo "$CHECKPOINT_PATH")"
+        HCP_SURFACE_DIR_FOR_CMD="$(realpath "$HCP_SURFACE_DIR" 2>/dev/null || echo "$HCP_SURFACE_DIR")"
+        OUTPUT_DIR_FOR_CMD="$(realpath "$PROJECT_ROOT" 2>/dev/null || echo "$PROJECT_ROOT")"
+    elif command -v readlink >/dev/null 2>&1; then
+        CHECKPOINT_PATH_FOR_CMD="$(readlink -f "$CHECKPOINT_PATH" 2>/dev/null || echo "$CHECKPOINT_PATH")"
+        HCP_SURFACE_DIR_FOR_CMD="$(readlink -f "$HCP_SURFACE_DIR" 2>/dev/null || echo "$HCP_SURFACE_DIR")"
+        OUTPUT_DIR_FOR_CMD="$(readlink -f "$PROJECT_ROOT" 2>/dev/null || echo "$PROJECT_ROOT")"
+    else
+        # Fallback: make relative paths absolute
+        if [[ "$CHECKPOINT_PATH" != /* ]]; then
+            CHECKPOINT_PATH_FOR_CMD="$(pwd)/$CHECKPOINT_PATH"
+        else
+            CHECKPOINT_PATH_FOR_CMD="$CHECKPOINT_PATH"
+        fi
+        if [[ "$HCP_SURFACE_DIR" != /* ]]; then
+            HCP_SURFACE_DIR_FOR_CMD="$(pwd)/$HCP_SURFACE_DIR"
+        else
+            HCP_SURFACE_DIR_FOR_CMD="$HCP_SURFACE_DIR"
+        fi
+        OUTPUT_DIR_FOR_CMD="$PROJECT_ROOT"
+    fi
     
     # Step 1: Native to fsaverage conversion
     echo ""
