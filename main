@@ -119,8 +119,10 @@ fi
 # Create output directories
 OUTPUT_DIR_FSLR="output_prf_fslr"
 OUTPUT_DIR_NATIVE="output_prf_native"
+OUTPUT_DIR_RAW="output_raw"
 mkdir -p "$OUTPUT_DIR_FSLR"
 mkdir -p "$OUTPUT_DIR_NATIVE"
+mkdir -p "$OUTPUT_DIR_RAW"
 
 # Process both hemispheres
 for HEMISPHERE in lh rh; do
@@ -262,8 +264,8 @@ for HEMISPHERE in lh rh; do
     echo "[Step 3] Completed!"
     
     # Find and copy output files to new directories with renamed files
+    # Find and copy final output files before moving intermediate files
     # Find fsaverage space output file (from Step 2)
-    # Output is saved in: $OUTPUT_DIR/$SUBJECT_ID/deepRetinotopy/$FILENAME
     FSLR_OUTPUT_PATTERN="${SUBJECT_ID}.predicted_${PREDICTION}_${HEMISPHERE}${MYELIN_SUFFIX}${MODEL_SUFFIX}.func.gii"
     FSLR_OUTPUT_FILE="$PROJECT_ROOT/$SUBJECT_ID/deepRetinotopy/$FSLR_OUTPUT_PATTERN"
     
@@ -278,19 +280,9 @@ for HEMISPHERE in lh rh; do
         fi
     else
         echo "WARNING: Could not find fsaverage space output file: $FSLR_OUTPUT_FILE"
-        # Try alternative locations
-        if [ -f "$PROJECT_ROOT/$FSLR_OUTPUT_PATTERN" ]; then
-            if [ "$HEMISPHERE" == "lh" ]; then
-                cp "$PROJECT_ROOT/$FSLR_OUTPUT_PATTERN" "$OUTPUT_DIR_FSLR/left.gii"
-            else
-                cp "$PROJECT_ROOT/$FSLR_OUTPUT_PATTERN" "$OUTPUT_DIR_FSLR/right.gii"
-            fi
-            echo "Found fsaverage space file in alternative location"
-        fi
     fi
     
     # Find native space output file (from Step 3)
-    # Output is saved in: $OUTPUT_DIR/$SUBJECT_ID/deepRetinotopy/$FILENAME
     NATIVE_OUTPUT_PATTERN="${SUBJECT_ID}.predicted_${PREDICTION}_${MODEL_NAME}.${HEMISPHERE}.native.func.gii"
     NATIVE_OUTPUT_FILE="$PROJECT_ROOT/$SUBJECT_ID/deepRetinotopy/$NATIVE_OUTPUT_PATTERN"
     
@@ -305,19 +297,30 @@ for HEMISPHERE in lh rh; do
         fi
     else
         echo "WARNING: Could not find native space output file: $NATIVE_OUTPUT_FILE"
-        # Try alternative locations
-        if [ -f "$PROJECT_ROOT/$NATIVE_OUTPUT_PATTERN" ]; then
-            if [ "$HEMISPHERE" == "lh" ]; then
-                cp "$PROJECT_ROOT/$NATIVE_OUTPUT_PATTERN" "$OUTPUT_DIR_NATIVE/left.gii"
-            else
-                cp "$PROJECT_ROOT/$NATIVE_OUTPUT_PATTERN" "$OUTPUT_DIR_NATIVE/right.gii"
-            fi
-            echo "Found native space file in alternative location"
-        fi
     fi
     
     echo "Hemisphere $HEMISPHERE processing completed!"
 done
+
+# After processing both hemispheres, move all intermediate files to output_raw
+echo ""
+echo "Moving all intermediate files to $OUTPUT_DIR_RAW..."
+if [ -d "$PROJECT_ROOT/$SUBJECT_ID" ]; then
+    # Move entire subject directory structure to output_raw
+    RAW_SUBJECT_DIR="$OUTPUT_DIR_RAW/$SUBJECT_ID"
+    mkdir -p "$RAW_SUBJECT_DIR"
+    
+    # Move all files and directories from subject directory to output_raw
+    if [ "$(ls -A "$PROJECT_ROOT/$SUBJECT_ID" 2>/dev/null)" ]; then
+        # Use rsync or cp+rm to preserve directory structure
+        cp -r "$PROJECT_ROOT/$SUBJECT_ID"/* "$RAW_SUBJECT_DIR/" 2>/dev/null || true
+        # Remove the original directory after successful copy
+        rm -rf "$PROJECT_ROOT/$SUBJECT_ID" 2>/dev/null || true
+        echo "All intermediate files moved to $RAW_SUBJECT_DIR"
+    else
+        rmdir "$PROJECT_ROOT/$SUBJECT_ID" 2>/dev/null || true
+    fi
+fi
 
 echo ""
 echo "==============================================="
@@ -326,3 +329,4 @@ echo "==============================================="
 echo "Results are available in:"
 echo "  - FSLR space: $OUTPUT_DIR_FSLR/"
 echo "  - Native space: $OUTPUT_DIR_NATIVE/"
+echo "  - Intermediate files: $OUTPUT_DIR_RAW/"
