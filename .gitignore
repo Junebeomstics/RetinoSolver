@@ -153,7 +153,7 @@ Retinotopy/data/processed_old2/
 Retinotopy/data/processed_orig/
 Models/wandb/
 Models/output_*
-Models/checkpoints/
+# Models/checkpoints/ - Now tracked with Git LFS
 
 # Large data files (should be downloaded separately)
 *.dscalar.nii
