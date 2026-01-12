@@ -4,9 +4,20 @@ import sys
 import time
 import argparse
 import copy
+import random
 import torch
 import torch_geometric.transforms as T
 import numpy as np
+import scipy.stats
+
+# Astropy import (optional, for circular correlation)
+try:
+    from astropy.stats import circcorrcoef
+    from astropy import units as u
+    ASTROPY_AVAILABLE = True
+except ImportError:
+    ASTROPY_AVAILABLE = False
+    print("Warning: Astropy not available. Circular correlation will use scipy alternative.")
 
 # Wandb import
 try:
@@ -15,14 +26,6 @@ try:
 except ImportError:
     WANDB_AVAILABLE = False
     print("Warning: Wandb not available. Logging will be skipped.")
-
-# Neptune import (optional) - COMMENTED OUT
-# try:
-#     import neptune
-#     NEPTUNE_AVAILABLE = True
-# except ImportError:
-#     NEPTUNE_AVAILABLE = False
-#     print("Warning: Neptune not available. Logging will be skipped.")
 
 # =============================
 # Argument Parser Setup
@@ -109,8 +112,25 @@ parser.add_argument('--early_stopping_patience', type=int, default=30,
                     help='Number of epochs to wait before early stopping if no improvement (default: 30)')
 parser.add_argument('--checkpoint_path', type=str, default=None,
                     help='Path to local checkpoint file (.pt) to load (if provided, only test will be run)')
+parser.add_argument('--seed', type=int, default=42,
+                    help='Random seed for reproducibility (default: 42)')
 
 args = parser.parse_args()
+
+# Set random seed for reproducibility
+def set_seed(seed):
+    """Set random seed for reproducibility across all libraries"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+set_seed(args.seed)
+print(f"Random seed set to: {args.seed}")
 
 # Convert run_test string to boolean
 args.run_test = args.run_test.lower() in ['true', '1']
@@ -208,6 +228,7 @@ if args.run_test:
         myelination=args.myelination,
         hemisphere=args.hemisphere
     )
+    # Use batch_size=args.batch_size for test set (note: may want batch_size=1 for per-subject processing)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
 
 # Wandb config logging (already done in wandb.init, but add additional configs)
@@ -424,10 +445,6 @@ def train(epoch):
             param_group['lr'] = args.lr_decay
         if wandb_run is not None:
             wandb.log({"lr_current": args.lr_decay}, step=epoch)
-        
-        # Neptune logging - COMMENTED OUT
-        # if run is not None:
-        #     run["lr_current"] = args.lr_decay
 
     for data in train_loader:
         data = data.to(device)
@@ -454,20 +471,12 @@ def train(epoch):
             scheduler.step()
             if wandb_run is not None:
                 wandb.log({"lr_current": scheduler.get_last_lr()[0]}, step=epoch)
-            
-            # Neptune logging - COMMENTED OUT
-            # if run is not None:
-            #     run["lr_current"] = scheduler.get_last_lr()[0]
     
     # CosineAnnealingLR scheduler steps per epoch
     if args.scheduler == 'cosine':
         scheduler.step()
         if wandb_run is not None:
             wandb.log({"lr_current": scheduler.get_last_lr()[0]}, step=epoch)
-        
-        # Neptune logging - COMMENTED OUT
-        # if run is not None:
-        #     run["lr_current"] = scheduler.get_last_lr()[0]
     
     # Wandb logging
     if wandb_run is not None:
@@ -475,11 +484,6 @@ def train(epoch):
             "train/loss": output_loss.detach().cpu().item(),
             "train/mae": MAE
         }, step=epoch)
-    
-    # Neptune logging - COMMENTED OUT
-    # if run is not None:
-    #     run["train/loss"].append(output_loss.detach().cpu().item())
-    #     run["train/mae"].append(MAE)
     
     return output_loss.detach(), MAE
 
@@ -516,6 +520,88 @@ def validate():
               'MAE': test_MAE, 'MAE_thr': test_MAE_thr}
     
     return output
+
+# =============================
+# Compute Correlations Per Subject
+# =============================
+def compute_subject_correlations(predicted_values, measured_values, R2_values, prediction_type, R2_threshold=2.2):
+    """
+    Compute correlations for each subject in the test set.
+    
+    Args:
+        predicted_values: List of tensors, one per subject (from test_loader batches)
+        measured_values: List of tensors, one per subject (from test_loader batches)
+        R2_values: List of tensors, one per subject with R2 values (from test_loader batches)
+        prediction_type: 'eccentricity', 'polarAngle', or 'pRFsize'
+        R2_threshold: R2 threshold for filtering vertices (default: 2.2)
+    
+    Returns:
+        Dictionary with correlation statistics
+    """
+    subject_correlations = []
+    
+    for subject_idx in range(len(predicted_values)):
+        # Get predicted and measured values for this subject
+        pred = predicted_values[subject_idx].cpu().numpy().flatten() if isinstance(predicted_values[subject_idx], torch.Tensor) else predicted_values[subject_idx].flatten()
+        meas = measured_values[subject_idx].cpu().numpy().flatten() if isinstance(measured_values[subject_idx], torch.Tensor) else measured_values[subject_idx].flatten()
+        R2 = R2_values[subject_idx].cpu().numpy().flatten() if isinstance(R2_values[subject_idx], torch.Tensor) else R2_values[subject_idx].flatten()
+        
+        # Filter by R2 threshold (same as other metrics)
+        R2_mask = R2 > R2_threshold
+        
+        # Remove NaN and Inf values
+        valid_mask = np.isfinite(pred) & np.isfinite(meas) & R2_mask
+        pred_valid = pred[valid_mask]
+        meas_valid = meas[valid_mask]
+        
+        if len(pred_valid) == 0:
+            print(f"Warning: No valid values for subject {subject_idx}")
+            subject_correlations.append(np.nan)
+            continue
+        
+        # Compute correlation based on prediction type
+        if prediction_type == 'polarAngle':
+            # Use circular correlation for polar angle
+            if ASTROPY_AVAILABLE:
+                try:
+                    # Convert to radians for circular correlation
+                    pred_rad = np.deg2rad(pred_valid)
+                    meas_rad = np.deg2rad(meas_valid)
+                    # circcorrcoef expects arrays with units
+                    pred_rad_with_units = pred_rad * u.rad
+                    meas_rad_with_units = meas_rad * u.rad
+                    corr_coef = circcorrcoef(pred_rad_with_units, meas_rad_with_units)
+                    subject_correlations.append(corr_coef)
+                except Exception as e:
+                    print(f"Error computing circular correlation for subject {subject_idx}: {e}")
+                    subject_correlations.append(np.nan)
+            else:
+                # Fallback: Use Pearson correlation (not ideal for circular data)
+                try:
+                    corr_coef, _ = scipy.stats.pearsonr(pred_valid, meas_valid)
+                    subject_correlations.append(corr_coef)
+                except Exception as e:
+                    print(f"Error computing Pearson correlation for subject {subject_idx}: {e}")
+                    subject_correlations.append(np.nan)
+        else:
+            # For eccentricity and pRFsize, use Pearson correlation
+            try:
+                corr_coef, _ = scipy.stats.pearsonr(pred_valid, meas_valid)
+                subject_correlations.append(corr_coef)
+            except Exception as e:
+                print(f"Error computing Pearson correlation for subject {subject_idx}: {e}")
+                subject_correlations.append(np.nan)
+    
+    subject_correlations = np.array(subject_correlations)
+    
+    return {
+        'subject_correlations': subject_correlations,
+        'mean': np.nanmean(subject_correlations),
+        'std': np.nanstd(subject_correlations),
+        'median': np.nanmedian(subject_correlations),
+        'min': np.nanmin(subject_correlations),
+        'max': np.nanmax(subject_correlations)
+    }
 
 def test(model_to_evaluate, model_name="model"):
     """Evaluate model on test set"""
@@ -560,12 +646,22 @@ def test(model_to_evaluate, model_name="model"):
 
     test_MAE = MeanAbsError / len(test_loader)
     test_MAE_thr = MeanAbsError_thr / len(test_loader)
+    
+    # Compute correlations per subject (filtering by R2 > 2.2, same as other metrics)
+    correlation_results = compute_subject_correlations(y_hat_save, y_save, R2_plot_save, args.prediction, R2_threshold=2.2)
+    
     output = {
         'Predicted_values': y_hat_save,
         'Measured_values': y_save,
         'R2': R2_plot_save,
         'MAE': test_MAE,
-        'MAE_thr': test_MAE_thr
+        'MAE_thr': test_MAE_thr,
+        'Correlation_mean': correlation_results['mean'],
+        'Correlation_std': correlation_results['std'],
+        'Correlation_median': correlation_results['median'],
+        'Correlation_min': correlation_results['min'],
+        'Correlation_max': correlation_results['max'],
+        'Subject_correlations': correlation_results['subject_correlations']
     }
     return output
 
@@ -707,6 +803,12 @@ if args.run_test:
             print(f"\nBest Model (epoch {best_epoch}) Test Results:")
             print(f"  Test MAE: {best_test_output['MAE']:.4f}")
             print(f"  Test MAE_thr: {best_test_output['MAE_thr']:.4f}")
+            print(f"  Correlation (mean ± std): {best_test_output['Correlation_mean']:.4f} ± {best_test_output['Correlation_std']:.4f}")
+            print(f"  Correlation (median): {best_test_output['Correlation_median']:.4f}")
+            print(f"  Correlation range: [{best_test_output['Correlation_min']:.4f}, {best_test_output['Correlation_max']:.4f}]")
+            print(f"  Individual subject correlations:")
+            for i, corr in enumerate(best_test_output['Subject_correlations']):
+                print(f"    Subject {i}: {corr:.4f}")
             
             # Save best model test results
             best_test_file = osp.join(
@@ -719,13 +821,22 @@ if args.run_test:
                 'Measured_values': best_test_output['Measured_values'],
                 'R2': best_test_output['R2'],
                 'Test_MAE': best_test_output['MAE'],
-                'Test_MAE_thr': best_test_output['MAE_thr']
+                'Test_MAE_thr': best_test_output['MAE_thr'],
+                'Correlation_mean': best_test_output['Correlation_mean'],
+                'Correlation_std': best_test_output['Correlation_std'],
+                'Correlation_median': best_test_output['Correlation_median'],
+                'Correlation_min': best_test_output['Correlation_min'],
+                'Correlation_max': best_test_output['Correlation_max'],
+                'Subject_correlations': best_test_output['Subject_correlations']
             }, best_test_file)
             
             if wandb_run is not None:
                 wandb.log({
                     "test/best_model/mae": best_test_output['MAE'],
                     "test/best_model/mae_thr": best_test_output['MAE_thr'],
+                    "test/best_model/correlation_mean": best_test_output['Correlation_mean'],
+                    "test/best_model/correlation_std": best_test_output['Correlation_std'],
+                    "test/best_model/correlation_median": best_test_output['Correlation_median'],
                     "test/best_model/epoch": best_epoch
                 })
                 # Optionally save test results as wandb artifact
@@ -749,6 +860,12 @@ if args.run_test:
         print(f"\nFinal Model ({epoch_str}) Test Results:")
         print(f"  Test MAE: {final_test_output['MAE']:.4f}")
         print(f"  Test MAE_thr: {final_test_output['MAE_thr']:.4f}")
+        print(f"  Correlation (mean ± std): {final_test_output['Correlation_mean']:.4f} ± {final_test_output['Correlation_std']:.4f}")
+        print(f"  Correlation (median): {final_test_output['Correlation_median']:.4f}")
+        print(f"  Correlation range: [{final_test_output['Correlation_min']:.4f}, {final_test_output['Correlation_max']:.4f}]")
+        print(f"  Individual subject correlations:")
+        for i, corr in enumerate(final_test_output['Subject_correlations']):
+            print(f"    Subject {i}: {corr:.4f}")
 
         # Save final model test results
         final_test_file = osp.join(
@@ -761,13 +878,22 @@ if args.run_test:
             'Measured_values': final_test_output['Measured_values'],
             'R2': final_test_output['R2'],
             'Test_MAE': final_test_output['MAE'],
-            'Test_MAE_thr': final_test_output['MAE_thr']
+            'Test_MAE_thr': final_test_output['MAE_thr'],
+            'Correlation_mean': final_test_output['Correlation_mean'],
+            'Correlation_std': final_test_output['Correlation_std'],
+            'Correlation_median': final_test_output['Correlation_median'],
+            'Correlation_min': final_test_output['Correlation_min'],
+            'Correlation_max': final_test_output['Correlation_max'],
+            'Subject_correlations': final_test_output['Subject_correlations']
         }, final_test_file)
         
         if wandb_run is not None:
             wandb.log({
                 "test/final_model/mae": final_test_output['MAE'],
                 "test/final_model/mae_thr": final_test_output['MAE_thr'],
+                "test/final_model/correlation_mean": final_test_output['Correlation_mean'],
+                "test/final_model/correlation_std": final_test_output['Correlation_std'],
+                "test/final_model/correlation_median": final_test_output['Correlation_median'],
                 "test/final_model/epoch": final_epoch
             })
             # Optionally save test results as wandb artifact
@@ -790,6 +916,12 @@ if args.run_test:
         print(f"\nFinal Model ({epoch_str}) Test Results:")
         print(f"  Test MAE: {final_test_output['MAE']:.4f}")
         print(f"  Test MAE_thr: {final_test_output['MAE_thr']:.4f}")
+        print(f"  Correlation (mean ± std): {final_test_output['Correlation_mean']:.4f} ± {final_test_output['Correlation_std']:.4f}")
+        print(f"  Correlation (median): {final_test_output['Correlation_median']:.4f}")
+        print(f"  Correlation range: [{final_test_output['Correlation_min']:.4f}, {final_test_output['Correlation_max']:.4f}]")
+        print(f"  Individual subject correlations:")
+        for i, corr in enumerate(final_test_output['Subject_correlations']):
+            print(f"    Subject {i}: {corr:.4f}")
         
         # Save final model test results
         final_test_file = osp.join(
@@ -802,13 +934,22 @@ if args.run_test:
             'Measured_values': final_test_output['Measured_values'],
             'R2': final_test_output['R2'],
             'Test_MAE': final_test_output['MAE'],
-            'Test_MAE_thr': final_test_output['MAE_thr']
+            'Test_MAE_thr': final_test_output['MAE_thr'],
+            'Correlation_mean': final_test_output['Correlation_mean'],
+            'Correlation_std': final_test_output['Correlation_std'],
+            'Correlation_median': final_test_output['Correlation_median'],
+            'Correlation_min': final_test_output['Correlation_min'],
+            'Correlation_max': final_test_output['Correlation_max'],
+            'Subject_correlations': final_test_output['Subject_correlations']
         }, final_test_file)
         
         if wandb_run is not None:
             wandb.log({
                 "test/final_model/mae": final_test_output['MAE'],
                 "test/final_model/mae_thr": final_test_output['MAE_thr'],
+                "test/final_model/correlation_mean": final_test_output['Correlation_mean'],
+                "test/final_model/correlation_std": final_test_output['Correlation_std'],
+                "test/final_model/correlation_median": final_test_output['Correlation_median'],
                 "test/final_model/epoch": final_epoch
             })
             # Optionally save test results as wandb artifact
@@ -817,5 +958,3 @@ if args.run_test:
             wandb_run.log_artifact(artifact)
         
         print(f"\nTest-only evaluation completed. Output directory: {output_path}")
-
-
