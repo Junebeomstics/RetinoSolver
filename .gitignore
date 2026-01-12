@@ -154,6 +154,7 @@ Retinotopy/data/processed_orig/
 Models/wandb/
 Models/output_*
 # Models/checkpoints/ - Now tracked with Git LFS
+eccentricity_*_noMyelin/
 
 # Large data files (should be downloaded separately)
 *.dscalar.nii
