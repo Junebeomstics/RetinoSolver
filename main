@@ -156,6 +156,10 @@ mkdir -p "$OUTPUT_DIR_FSLR"
 mkdir -p "$OUTPUT_DIR_NATIVE"
 mkdir -p "$OUTPUT_DIR_RAW"
 
+# Create HCP surface directory if it doesn't exist
+# This directory is required for Singularity bind mounting
+mkdir -p "$HCP_SURFACE_DIR"
+
 # Process both hemispheres
 for HEMISPHERE in lh rh; do
     echo ""
