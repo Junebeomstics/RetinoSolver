@@ -152,9 +152,11 @@ fi
 OUTPUT_DIR_FSLR="output_prf_fslr"
 OUTPUT_DIR_NATIVE="output_prf_native"
 OUTPUT_DIR_RAW="output_raw"
+OUTPUT_DIR_STEP1="step1_output"
 mkdir -p "$OUTPUT_DIR_FSLR"
 mkdir -p "$OUTPUT_DIR_NATIVE"
 mkdir -p "$OUTPUT_DIR_RAW"
+mkdir -p "$OUTPUT_DIR_STEP1"
 
 # Create HCP surface directory if it doesn't exist
 # This directory is required for Singularity bind mounting
@@ -263,6 +265,7 @@ for HEMISPHERE in lh rh; do
     STEP1_CMD="$STEP1_CMD -h $HEMISPHERE"
     STEP1_CMD="$STEP1_CMD -j $N_JOBS"
     STEP1_CMD="$STEP1_CMD -i $SUBJECT_ID"
+    STEP1_CMD="$STEP1_CMD -o /workspace/$OUTPUT_DIR_STEP1"
     
     singularity exec -e $BASE_BINDS \
         "$SINGULARITY_IMAGE" \
@@ -278,8 +281,8 @@ for HEMISPHERE in lh rh; do
     # Debug: Check what files were created after Step 1
     echo ""
     echo "Checking generated files after native2fsaverage conversion..."
-    if [ -d "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/surf" ]; then
-        find "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/surf" -name "*.gii" -o -name "*.mgz" -o -name "*.nii*" 2>/dev/null | head -10
+    if [ -d "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/surf" ]; then
+        find "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/surf" -name "*.gii" -o -name "*.mgz" -o -name "*.nii*" 2>/dev/null | head -10
     fi
     
     # Step 2: Inference
@@ -287,14 +290,17 @@ for HEMISPHERE in lh rh; do
     echo "[Step 2] Running Inference"
     echo "==============================================="
     
+    # Use Step 1 output directory as freesurfer_dir for Step 2 (to find template files)
+    # Step 2 will save results to output_dir if specified
     STEP2_CMD="python /workspace/Models/run_inference_freesurfer.py"
-    STEP2_CMD="$STEP2_CMD --freesurfer_dir /workspace/freesurfer"
+    STEP2_CMD="$STEP2_CMD --freesurfer_dir /workspace/$OUTPUT_DIR_STEP1"
     STEP2_CMD="$STEP2_CMD --checkpoint_path $CHECKPOINT_PATH_CONTAINER"
     STEP2_CMD="$STEP2_CMD --model_type $MODEL_TYPE"
     STEP2_CMD="$STEP2_CMD --prediction $PREDICTION"
     STEP2_CMD="$STEP2_CMD --hemisphere $HEMISPHERE_LONG"
     STEP2_CMD="$STEP2_CMD --myelination $MYELINATION"
     STEP2_CMD="$STEP2_CMD --subject_id $SUBJECT_ID"
+    STEP2_CMD="$STEP2_CMD --output_dir /workspace/$OUTPUT_DIR_STEP1"
     
     singularity exec -e $SINGULARITY_BINDS \
         "$SINGULARITY_IMAGE" \
@@ -310,13 +316,13 @@ for HEMISPHERE in lh rh; do
     # Debug: Check what files were created after Step 2
     echo ""
     echo "Checking generated files after inference..."
-    if [ -d "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/deepRetinotopy" ]; then
-        echo "Files in $FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/deepRetinotopy:"
-        ls -lah "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/deepRetinotopy/" 2>/dev/null || echo "  (directory exists but listing failed)"
+    if [ -d "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy" ]; then
+        echo "Files in $PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy:"
+        ls -lah "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy/" 2>/dev/null || echo "  (directory exists but listing failed)"
     else
-        echo "WARNING: Directory $FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/deepRetinotopy does not exist"
+        echo "WARNING: Directory $PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy does not exist"
         echo "Searching for any generated files..."
-        find "$FREESURFER_SUBJECTS_DIR" -name "*.func.gii" -type f 2>/dev/null | head -20
+        find "$PROJECT_ROOT/$OUTPUT_DIR_STEP1" -name "*.func.gii" -type f 2>/dev/null | head -20
     fi
     
     # Step 3: Fsaverage to native conversion
@@ -324,8 +330,10 @@ for HEMISPHERE in lh rh; do
     echo "[Step 3] Fsaverage to Native Space Conversion"
     echo "==============================================="
     
+    # Step 3 needs to read from Step 1 output (surf files) and Step 2 output (prediction files)
+    # Use step1_output as freesurfer_dir and specify output_dir to save results there
     STEP3_CMD="cd /workspace/run_from_freesurfer && ./2_fsaverage2native.sh"
-    STEP3_CMD="$STEP3_CMD -s /workspace/freesurfer"
+    STEP3_CMD="$STEP3_CMD -s /workspace/$OUTPUT_DIR_STEP1"
     STEP3_CMD="$STEP3_CMD -t /workspace/surface"
     STEP3_CMD="$STEP3_CMD -h $HEMISPHERE"
     STEP3_CMD="$STEP3_CMD -r $PREDICTION"
@@ -333,6 +341,7 @@ for HEMISPHERE in lh rh; do
     STEP3_CMD="$STEP3_CMD -y $MYELINATION"
     STEP3_CMD="$STEP3_CMD -j $N_JOBS"
     STEP3_CMD="$STEP3_CMD -i $SUBJECT_ID"
+    STEP3_CMD="$STEP3_CMD -o /workspace/$OUTPUT_DIR_STEP1"
     
     singularity exec -e $SINGULARITY_BINDS \
         "$SINGULARITY_IMAGE" \
@@ -348,16 +357,16 @@ for HEMISPHERE in lh rh; do
     # Debug: Check what files were created after Step 3
     echo ""
     echo "Checking generated files after native space conversion..."
-    if [ -d "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/deepRetinotopy" ]; then
-        echo "Files in $FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/deepRetinotopy:"
-        ls -lah "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/deepRetinotopy/" 2>/dev/null || echo "  (directory exists but listing failed)"
+    if [ -d "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy" ]; then
+        echo "Files in $PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy:"
+        ls -lah "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy/" 2>/dev/null || echo "  (directory exists but listing failed)"
     fi
     
     # Find and copy output files to new directories with renamed files
     # Find and copy final output files before moving intermediate files
     # Find fsaverage space output file (from Step 2)
     FSLR_OUTPUT_PATTERN="${SUBJECT_ID}.predicted_${PREDICTION}_${HEMISPHERE}${MYELIN_SUFFIX}${MODEL_SUFFIX}.func.gii"
-    FSLR_OUTPUT_FILE="$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/deepRetinotopy/$FSLR_OUTPUT_PATTERN"
+    FSLR_OUTPUT_FILE="$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy/$FSLR_OUTPUT_PATTERN"
     
     if [ -f "$FSLR_OUTPUT_FILE" ]; then
         # Copy to output_prf_fslr with renamed file
@@ -372,7 +381,7 @@ for HEMISPHERE in lh rh; do
         echo "WARNING: Could not find exact match: $FSLR_OUTPUT_FILE"
         # Try to find any matching file with flexible pattern
         echo "Searching for alternative patterns..."
-        FSLR_FOUND=$(find "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/deepRetinotopy" -name "*predicted*${PREDICTION}*${HEMISPHERE}*.func.gii" -type f 2>/dev/null | grep -v "native" | head -1)
+        FSLR_FOUND=$(find "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy" -name "*predicted*${PREDICTION}*${HEMISPHERE}*.func.gii" -type f 2>/dev/null | grep -v "native" | head -1)
         if [ -n "$FSLR_FOUND" ] && [ -f "$FSLR_FOUND" ]; then
             echo "Found alternative file: $FSLR_FOUND"
             if [ "$HEMISPHERE" == "lh" ]; then
@@ -389,7 +398,7 @@ for HEMISPHERE in lh rh; do
     
     # Find native space output file (from Step 3)
     NATIVE_OUTPUT_PATTERN="${SUBJECT_ID}.predicted_${PREDICTION}_${MODEL_NAME}.${HEMISPHERE}.native.func.gii"
-    NATIVE_OUTPUT_FILE="$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/deepRetinotopy/$NATIVE_OUTPUT_PATTERN"
+    NATIVE_OUTPUT_FILE="$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy/$NATIVE_OUTPUT_PATTERN"
     
     if [ -f "$NATIVE_OUTPUT_FILE" ]; then
         # Copy to output_prf_native with renamed file
@@ -404,7 +413,7 @@ for HEMISPHERE in lh rh; do
         echo "WARNING: Could not find exact match: $NATIVE_OUTPUT_FILE"
         # Try to find any matching file with flexible pattern
         echo "Searching for alternative patterns..."
-        NATIVE_FOUND=$(find "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/deepRetinotopy" -name "*predicted*${PREDICTION}*${HEMISPHERE}*native*.func.gii" -type f 2>/dev/null | head -1)
+        NATIVE_FOUND=$(find "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy" -name "*predicted*${PREDICTION}*${HEMISPHERE}*native*.func.gii" -type f 2>/dev/null | head -1)
         if [ -n "$NATIVE_FOUND" ] && [ -f "$NATIVE_FOUND" ]; then
             echo "Found alternative file: $NATIVE_FOUND"
             if [ "$HEMISPHERE" == "lh" ]; then
@@ -425,20 +434,20 @@ done
 # After processing both hemispheres, move all intermediate files to output_raw
 echo ""
 echo "Moving all intermediate files to $OUTPUT_DIR_RAW..."
-if [ -d "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID" ]; then
+if [ -d "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID" ]; then
     # Move entire subject directory structure to output_raw
     RAW_SUBJECT_DIR="$OUTPUT_DIR_RAW/$SUBJECT_ID"
     mkdir -p "$RAW_SUBJECT_DIR"
     
-    # Move all files and directories from subject directory to output_raw
-    if [ "$(ls -A "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID" 2>/dev/null)" ]; then
+    # Move all files and directories from step1_output to output_raw
+    if [ "$(ls -A "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID" 2>/dev/null)" ]; then
         # Use rsync or cp+rm to preserve directory structure
-        cp -r "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID"/* "$RAW_SUBJECT_DIR/" 2>/dev/null || true
+        cp -r "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID"/* "$RAW_SUBJECT_DIR/" 2>/dev/null || true
         # Remove the original directory after successful copy
-        rm -rf "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID" 2>/dev/null || true
+        rm -rf "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID" 2>/dev/null || true
         echo "All intermediate files moved to $RAW_SUBJECT_DIR"
     else
-        rmdir "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID" 2>/dev/null || true
+        rmdir "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID" 2>/dev/null || true
     fi
 fi
 
