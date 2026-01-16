@@ -26,7 +26,7 @@ MODEL_TYPE="baseline"
 MYELINATION="False"
 R2_THRESHOLD="0.1"
 OUTPUT_DIR="./nsd_evaluation"
-NSD_DIR="/mnt/external_storage1/natural-scenes-dataset/nsddata/freesurfer"
+NSD_DIR="/home/junb/cerebro/mnt/external_storage1/natural-scenes-dataset/nsddata/freesurfer"
 USE_GPU="true"
 
 # Auto-detect number of cores
@@ -108,33 +108,109 @@ fi
 # Create output directory
 mkdir -p "$OUTPUT_DIR"
 
-# Check if container is already running, or create/start it
-CONTAINER_RUNNING=false
-if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    CONTAINER_RUNNING=true
-    echo "Container '$CONTAINER_NAME' is already running. Using existing container."
-elif docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    echo "Container '$CONTAINER_NAME' exists but is stopped. Starting it..."
-    docker start "$CONTAINER_NAME" > /dev/null 2>&1
-    CONTAINER_RUNNING=true
-else
-    echo "Creating new container '$CONTAINER_NAME'..."
-    DOCKER_CMD="docker run -d"
-    if [ "$USE_GPU" = "true" ]; then
-        DOCKER_CMD="$DOCKER_CMD --gpus all"
-    fi
-    DOCKER_CMD="$DOCKER_CMD --name $CONTAINER_NAME"
-    DOCKER_CMD="$DOCKER_CMD -v $PROJECT_ROOT:/workspace"
-    DOCKER_CMD="$DOCKER_CMD -v $NSD_DIR:/mnt/nsd_freesurfer"
-    DOCKER_CMD="$DOCKER_CMD -v $HCP_SURFACE_DIR:/mnt/hcp_surface"
-    DOCKER_CMD="$DOCKER_CMD -w /workspace"
-    DOCKER_CMD="$DOCKER_CMD $DOCKER_IMAGE"
-    DOCKER_CMD="$DOCKER_CMD tail -f /dev/null"  # Keep container running
-    
-    eval "$DOCKER_CMD" > /dev/null 2>&1
-    CONTAINER_RUNNING=true
-    echo "Container created successfully."
+# Normalize paths to resolve symlinks and get absolute paths
+if command -v realpath >/dev/null 2>&1; then
+    PROJECT_ROOT=$(realpath "$PROJECT_ROOT")
+    NSD_DIR=$(realpath "$NSD_DIR" 2>/dev/null || echo "$NSD_DIR")
+    HCP_SURFACE_DIR=$(realpath "$HCP_SURFACE_DIR" 2>/dev/null || echo "$HCP_SURFACE_DIR")
 fi
+
+# Verify all mount source paths exist before creating container
+echo "Verifying mount source paths..."
+
+# Check PROJECT_ROOT
+if [ ! -d "$PROJECT_ROOT" ]; then
+    echo "ERROR: Project root directory does not exist: $PROJECT_ROOT"
+    exit 1
+fi
+if [ -f "$PROJECT_ROOT" ]; then
+    echo "ERROR: Project root path exists but is a file, not a directory: $PROJECT_ROOT"
+    exit 1
+fi
+echo "  PROJECT_ROOT: $PROJECT_ROOT (OK)"
+
+# Check NSD_DIR and its parent paths
+if [ ! -d "$NSD_DIR" ]; then
+    echo "ERROR: NSD directory does not exist: $NSD_DIR"
+    echo "Please check if the path is correct and accessible."
+    # Check parent paths to help diagnose the issue
+    PARENT_PATH=$(dirname "$NSD_DIR")
+    while [ "$PARENT_PATH" != "/" ] && [ "$PARENT_PATH" != "." ]; do
+        if [ -f "$PARENT_PATH" ]; then
+            echo "ERROR: Parent path exists but is a file, not a directory: $PARENT_PATH"
+            exit 1
+        fi
+        if [ ! -d "$PARENT_PATH" ]; then
+            echo "WARNING: Parent directory does not exist: $PARENT_PATH"
+        fi
+        PARENT_PATH=$(dirname "$PARENT_PATH")
+    done
+    exit 1
+fi
+if [ -f "$NSD_DIR" ]; then
+    echo "ERROR: NSD path exists but is a file, not a directory: $NSD_DIR"
+    exit 1
+fi
+echo "  NSD_DIR: $NSD_DIR (OK)"
+
+# Create HCP surface directory if it doesn't exist
+if [ ! -d "$HCP_SURFACE_DIR" ]; then
+    echo "Creating HCP surface directory: $HCP_SURFACE_DIR"
+    mkdir -p "$HCP_SURFACE_DIR"
+fi
+
+# Verify paths are absolute (Docker requires absolute paths for bind mounts)
+if [[ ! "$PROJECT_ROOT" = /* ]]; then
+    echo "ERROR: PROJECT_ROOT must be an absolute path: $PROJECT_ROOT"
+    exit 1
+fi
+if [[ ! "$NSD_DIR" = /* ]]; then
+    echo "ERROR: NSD_DIR must be an absolute path: $NSD_DIR"
+    exit 1
+fi
+if [[ ! "$HCP_SURFACE_DIR" = /* ]]; then
+    echo "ERROR: HCP_SURFACE_DIR must be an absolute path: $HCP_SURFACE_DIR"
+    exit 1
+fi
+
+echo "All mount paths verified."
+
+# Always remove existing container and create a new one
+if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+    echo "Removing existing container '$CONTAINER_NAME'..."
+    docker rm -f "$CONTAINER_NAME" > /dev/null 2>&1
+fi
+
+echo "Creating new container '$CONTAINER_NAME'..."
+DOCKER_CMD="docker run -d"
+if [ "$USE_GPU" = "true" ]; then
+    DOCKER_CMD="$DOCKER_CMD --gpus all"
+fi
+DOCKER_CMD="$DOCKER_CMD --name $CONTAINER_NAME"
+# Use --mount instead of -v for more explicit control
+DOCKER_CMD="$DOCKER_CMD --mount type=bind,source=$PROJECT_ROOT,target=/workspace"
+DOCKER_CMD="$DOCKER_CMD --mount type=bind,source=$NSD_DIR,target=/mnt/nsd_freesurfer"
+DOCKER_CMD="$DOCKER_CMD --mount type=bind,source=$HCP_SURFACE_DIR,target=/mnt/hcp_surface"
+DOCKER_CMD="$DOCKER_CMD -w /workspace"
+DOCKER_CMD="$DOCKER_CMD $DOCKER_IMAGE"
+DOCKER_CMD="$DOCKER_CMD tail -f /dev/null"  # Keep container running
+
+eval "$DOCKER_CMD"
+if [ $? -ne 0 ]; then
+    echo "ERROR: Failed to create container"
+    echo "Please check:"
+    echo "  1. All mount source paths exist and are accessible"
+    echo "  2. Docker has permission to access these paths"
+    echo "  3. Paths are absolute (not relative)"
+    echo ""
+    echo "Debug information:"
+    echo "  PROJECT_ROOT: $PROJECT_ROOT"
+    echo "  NSD_DIR: $NSD_DIR"
+    echo "  HCP_SURFACE_DIR: $HCP_SURFACE_DIR"
+    exit 1
+fi
+
+echo "Container created successfully."
 
 # Map hemisphere to long name
 if [ "$HEMISPHERE" == "lh" ]; then

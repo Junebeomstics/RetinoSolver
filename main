@@ -198,31 +198,58 @@ for HEMISPHERE in lh rh; do
         MODEL_SUFFIX=""
     fi
     
-    # Build paths for container
-    # Use subjects directory for freesurfer_dir parameter
-    FREESURFER_DIR_FOR_CMD="$FREESURFER_SUBJECTS_DIR"
+    # Convert paths to absolute for bind mounts
     # Use readlink -f if realpath is not available
     if command -v realpath >/dev/null 2>&1; then
-        CHECKPOINT_PATH_FOR_CMD="$(realpath "$CHECKPOINT_PATH" 2>/dev/null || echo "$CHECKPOINT_PATH")"
-        HCP_SURFACE_DIR_FOR_CMD="$(realpath "$HCP_SURFACE_DIR" 2>/dev/null || echo "$HCP_SURFACE_DIR")"
-        OUTPUT_DIR_FOR_CMD="$(realpath "$PROJECT_ROOT" 2>/dev/null || echo "$PROJECT_ROOT")"
+        CHECKPOINT_PATH_ABS="$(realpath "$CHECKPOINT_PATH" 2>/dev/null || echo "$CHECKPOINT_PATH")"
+        HCP_SURFACE_DIR_ABS="$(realpath "$HCP_SURFACE_DIR" 2>/dev/null || echo "$HCP_SURFACE_DIR")"
+        PROJECT_ROOT_ABS="$(realpath "$PROJECT_ROOT" 2>/dev/null || echo "$PROJECT_ROOT")"
+        FREESURFER_SUBJECTS_DIR_ABS="$(realpath "$FREESURFER_SUBJECTS_DIR" 2>/dev/null || echo "$FREESURFER_SUBJECTS_DIR")"
     elif command -v readlink >/dev/null 2>&1; then
-        CHECKPOINT_PATH_FOR_CMD="$(readlink -f "$CHECKPOINT_PATH" 2>/dev/null || echo "$CHECKPOINT_PATH")"
-        HCP_SURFACE_DIR_FOR_CMD="$(readlink -f "$HCP_SURFACE_DIR" 2>/dev/null || echo "$HCP_SURFACE_DIR")"
-        OUTPUT_DIR_FOR_CMD="$(readlink -f "$PROJECT_ROOT" 2>/dev/null || echo "$PROJECT_ROOT")"
+        CHECKPOINT_PATH_ABS="$(readlink -f "$CHECKPOINT_PATH" 2>/dev/null || echo "$CHECKPOINT_PATH")"
+        HCP_SURFACE_DIR_ABS="$(readlink -f "$HCP_SURFACE_DIR" 2>/dev/null || echo "$HCP_SURFACE_DIR")"
+        PROJECT_ROOT_ABS="$(readlink -f "$PROJECT_ROOT" 2>/dev/null || echo "$PROJECT_ROOT")"
+        FREESURFER_SUBJECTS_DIR_ABS="$(readlink -f "$FREESURFER_SUBJECTS_DIR" 2>/dev/null || echo "$FREESURFER_SUBJECTS_DIR")"
     else
         # Fallback: make relative paths absolute
         if [[ "$CHECKPOINT_PATH" != /* ]]; then
-            CHECKPOINT_PATH_FOR_CMD="$(pwd)/$CHECKPOINT_PATH"
+            CHECKPOINT_PATH_ABS="$(pwd)/$CHECKPOINT_PATH"
         else
-            CHECKPOINT_PATH_FOR_CMD="$CHECKPOINT_PATH"
+            CHECKPOINT_PATH_ABS="$CHECKPOINT_PATH"
         fi
         if [[ "$HCP_SURFACE_DIR" != /* ]]; then
-            HCP_SURFACE_DIR_FOR_CMD="$(pwd)/$HCP_SURFACE_DIR"
+            HCP_SURFACE_DIR_ABS="$(pwd)/$HCP_SURFACE_DIR"
         else
-            HCP_SURFACE_DIR_FOR_CMD="$HCP_SURFACE_DIR"
+            HCP_SURFACE_DIR_ABS="$HCP_SURFACE_DIR"
         fi
-        OUTPUT_DIR_FOR_CMD="$PROJECT_ROOT"
+        PROJECT_ROOT_ABS="$PROJECT_ROOT"
+        FREESURFER_SUBJECTS_DIR_ABS="$FREESURFER_SUBJECTS_DIR"
+    fi
+    
+    # Build base Singularity bind mounts: bind everything to workspace
+    # This makes paths consistent and simpler
+    BASE_BINDS="-B $PROJECT_ROOT_ABS:/workspace"
+    BASE_BINDS="$BASE_BINDS -B $FREESURFER_SUBJECTS_DIR_ABS:/workspace/freesurfer"
+    BASE_BINDS="$BASE_BINDS -B $HCP_SURFACE_DIR_ABS:/workspace/surface"
+    
+    # Check if checkpoint needs separate bind mount
+    CHECKPOINT_BASENAME=$(basename "$CHECKPOINT_PATH_ABS")
+    CHECKPOINT_DIR=$(dirname "$CHECKPOINT_PATH_ABS")
+    
+    # Normalize paths for comparison (remove trailing slashes)
+    PROJECT_ROOT_NORM="${PROJECT_ROOT_ABS%/}"
+    CHECKPOINT_DIR_NORM="${CHECKPOINT_DIR%/}"
+    
+    # If checkpoint is within project root, use relative path; otherwise bind it separately
+    if [[ "$CHECKPOINT_DIR_NORM" == "$PROJECT_ROOT_NORM"* ]]; then
+        # Checkpoint is within project root, use relative path
+        CHECKPOINT_REL_PATH="${CHECKPOINT_PATH_ABS#$PROJECT_ROOT_NORM/}"
+        CHECKPOINT_PATH_CONTAINER="/workspace/$CHECKPOINT_REL_PATH"
+        SINGULARITY_BINDS="$BASE_BINDS"
+    else
+        # Checkpoint is outside project root, need separate bind
+        CHECKPOINT_PATH_CONTAINER="/workspace/checkpoint_dir/$CHECKPOINT_BASENAME"
+        SINGULARITY_BINDS="$BASE_BINDS -B $CHECKPOINT_DIR:/workspace/checkpoint_dir"
     fi
     
     # Step 1: Native to fsaverage conversion
@@ -231,18 +258,13 @@ for HEMISPHERE in lh rh; do
     echo "==============================================="
     
     STEP1_CMD="cd /workspace/run_from_freesurfer && ./1_native2fsaverage.sh"
-    STEP1_CMD="$STEP1_CMD -s /mnt/freesurfer"
-    STEP1_CMD="$STEP1_CMD -t /mnt/hcp_surface"
+    STEP1_CMD="$STEP1_CMD -s /workspace/freesurfer"
+    STEP1_CMD="$STEP1_CMD -t /workspace/surface"
     STEP1_CMD="$STEP1_CMD -h $HEMISPHERE"
     STEP1_CMD="$STEP1_CMD -j $N_JOBS"
     STEP1_CMD="$STEP1_CMD -i $SUBJECT_ID"
-    STEP1_CMD="$STEP1_CMD -o /workspace"
     
-    singularity exec -e \
-        -B "$PROJECT_ROOT:/workspace" \
-        -B "$FREESURFER_SUBJECTS_DIR:/mnt/freesurfer" \
-        -B "$(dirname "$CHECKPOINT_PATH_FOR_CMD"):/mnt/checkpoint" \
-        -B "$HCP_SURFACE_DIR_FOR_CMD:/mnt/hcp_surface" \
+    singularity exec -e $BASE_BINDS \
         "$SINGULARITY_IMAGE" \
         bash -c "$STEP1_CMD"
     
@@ -256,8 +278,8 @@ for HEMISPHERE in lh rh; do
     # Debug: Check what files were created after Step 1
     echo ""
     echo "Checking generated files after native2fsaverage conversion..."
-    if [ -d "/mnt/freesurfer/$SUBJECT_ID" ]; then
-        find "/mnt/freesurfer/$SUBJECT_ID" -name "*.gii" -o -name "*.mgz" -o -name "*.nii*" 2>/dev/null | head -10
+    if [ -d "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/surf" ]; then
+        find "$FREESURFER_SUBJECTS_DIR/$SUBJECT_ID/surf" -name "*.gii" -o -name "*.mgz" -o -name "*.nii*" 2>/dev/null | head -10
     fi
     
     # Step 2: Inference
@@ -266,25 +288,15 @@ for HEMISPHERE in lh rh; do
     echo "==============================================="
     
     STEP2_CMD="python /workspace/Models/run_inference_freesurfer.py"
-    STEP2_CMD="$STEP2_CMD --freesurfer_dir /mnt/freesurfer"
-    # Convert checkpoint path for container
-    CHECKPOINT_BASENAME=$(basename "$CHECKPOINT_PATH_FOR_CMD")
-    CHECKPOINT_DIR=$(dirname "$CHECKPOINT_PATH_FOR_CMD")
-    CHECKPOINT_PATH_CONTAINER="/mnt/checkpoint/$CHECKPOINT_BASENAME"
-    
+    STEP2_CMD="$STEP2_CMD --freesurfer_dir /workspace/freesurfer"
     STEP2_CMD="$STEP2_CMD --checkpoint_path $CHECKPOINT_PATH_CONTAINER"
     STEP2_CMD="$STEP2_CMD --model_type $MODEL_TYPE"
     STEP2_CMD="$STEP2_CMD --prediction $PREDICTION"
     STEP2_CMD="$STEP2_CMD --hemisphere $HEMISPHERE_LONG"
     STEP2_CMD="$STEP2_CMD --myelination $MYELINATION"
     STEP2_CMD="$STEP2_CMD --subject_id $SUBJECT_ID"
-    #STEP2_CMD="$STEP2_CMD --output_dir /workspace"
     
-    singularity exec -e \
-        -B "$PROJECT_ROOT:/workspace" \
-        -B "$FREESURFER_SUBJECTS_DIR:/mnt/freesurfer" \
-        -B "$(dirname "$CHECKPOINT_PATH_FOR_CMD"):/mnt/checkpoint" \
-        -B "$HCP_SURFACE_DIR_FOR_CMD:/mnt/hcp_surface" \
+    singularity exec -e $SINGULARITY_BINDS \
         "$SINGULARITY_IMAGE" \
         bash -c "$STEP2_CMD"
     
@@ -313,21 +325,16 @@ for HEMISPHERE in lh rh; do
     echo "==============================================="
     
     STEP3_CMD="cd /workspace/run_from_freesurfer && ./2_fsaverage2native.sh"
-    STEP3_CMD="$STEP3_CMD -s /mnt/freesurfer"
-    STEP3_CMD="$STEP3_CMD -t /mnt/hcp_surface"
+    STEP3_CMD="$STEP3_CMD -s /workspace/freesurfer"
+    STEP3_CMD="$STEP3_CMD -t /workspace/surface"
     STEP3_CMD="$STEP3_CMD -h $HEMISPHERE"
     STEP3_CMD="$STEP3_CMD -r $PREDICTION"
     STEP3_CMD="$STEP3_CMD -m $MODEL_TYPE"
     STEP3_CMD="$STEP3_CMD -y $MYELINATION"
     STEP3_CMD="$STEP3_CMD -j $N_JOBS"
     STEP3_CMD="$STEP3_CMD -i $SUBJECT_ID"
-    #STEP3_CMD="$STEP3_CMD -o /workspace"
     
-    singularity exec -e \
-        -B "$PROJECT_ROOT:/workspace" \
-        -B "$FREESURFER_SUBJECTS_DIR:/mnt/freesurfer" \
-        -B "$(dirname "$CHECKPOINT_PATH_FOR_CMD"):/mnt/checkpoint" \
-        -B "$HCP_SURFACE_DIR_FOR_CMD:/mnt/hcp_surface" \
+    singularity exec -e $SINGULARITY_BINDS \
         "$SINGULARITY_IMAGE" \
         bash -c "$STEP3_CMD"
     
