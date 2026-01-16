@@ -271,13 +271,12 @@ for HEMISPHERE in lh rh; do
     echo "  Step1 Output: $OUTPUT_DIR_STEP1"
     
     # Build Singularity bind mounts
-    # CRITICAL: Bind output directory separately to ensure files persist outside container
-    # This is essential for Brainlife to capture outputs
+    # NOTE: step1_output and surface are subdirectories of PROJECT_ROOT, so they're
+    # automatically included in the /workspace bind. Do NOT add separate binds for them
+    # as overlapping mounts can cause files to not persist correctly.
     BASE_BINDS="-B $PROJECT_ROOT_ABS:/workspace"
     BASE_BINDS="$BASE_BINDS -B $FREESURFER_SUBJECTS_DIR_ABS:/workspace/freesurfer"
-    BASE_BINDS="$BASE_BINDS -B $HCP_SURFACE_DIR_ABS:/workspace/surface"
-    # Bind step1_output to ensure all intermediate outputs are accessible
-    BASE_BINDS="$BASE_BINDS -B $OUTPUT_DIR_STEP1:/workspace/step1_output"
+    # surface is already at /workspace/surface via the main bind
     
     # Check if checkpoint needs separate bind mount
     CHECKPOINT_BASENAME=$(basename "$CHECKPOINT_PATH_ABS")
@@ -303,13 +302,73 @@ for HEMISPHERE in lh rh; do
     echo "  BASE_BINDS: $BASE_BINDS"
     echo "  CHECKPOINT_PATH_CONTAINER: $CHECKPOINT_PATH_CONTAINER"
     
+    # Pre-flight checks
+    echo ""
+    echo "Pre-flight checks..."
+    
+    # Check HCP surface templates
+    HCP_TEMPLATE_L="$HCP_SURFACE_DIR_ABS/fs_LR-deformed_to-fsaverage.L.sphere.32k_fs_LR.surf.gii"
+    HCP_TEMPLATE_R="$HCP_SURFACE_DIR_ABS/fs_LR-deformed_to-fsaverage.R.sphere.32k_fs_LR.surf.gii"
+    if [ ! -f "$HCP_TEMPLATE_L" ] || [ ! -f "$HCP_TEMPLATE_R" ]; then
+        echo "ERROR: HCP surface templates not found in $HCP_SURFACE_DIR_ABS"
+        echo "  Required: fs_LR-deformed_to-fsaverage.L.sphere.32k_fs_LR.surf.gii"
+        echo "  Required: fs_LR-deformed_to-fsaverage.R.sphere.32k_fs_LR.surf.gii"
+        ls -la "$HCP_SURFACE_DIR_ABS/" 2>/dev/null || echo "  (directory not found)"
+        exit 1
+    fi
+    echo "  [OK] HCP surface templates found"
+    
+    # Check FreeSurfer subject directory
+    FS_SUBJECT_DIR="$FREESURFER_SUBJECTS_DIR_ABS/$SUBJECT_ID"
+    if [ ! -d "$FS_SUBJECT_DIR/surf" ]; then
+        echo "ERROR: FreeSurfer subject surf directory not found: $FS_SUBJECT_DIR/surf"
+        echo "  FreeSurfer subjects dir contents:"
+        ls -la "$FREESURFER_SUBJECTS_DIR_ABS/" 2>/dev/null | head -20
+        exit 1
+    fi
+    echo "  [OK] FreeSurfer subject directory found: $FS_SUBJECT_DIR"
+    
+    # Check checkpoint
+    if [ ! -f "$CHECKPOINT_PATH_ABS" ]; then
+        echo "ERROR: Checkpoint file not found: $CHECKPOINT_PATH_ABS"
+        exit 1
+    fi
+    echo "  [OK] Checkpoint file found"
+    
+    echo "Pre-flight checks passed!"
+    
+    # Container paths - step1_output is a subdirectory of /workspace (PROJECT_ROOT)
+    # Since we bind PROJECT_ROOT to /workspace, step1_output is at /workspace/step1_output
+    CONTAINER_STEP1_OUTPUT="/workspace/step1_output"
+    
+    # Ensure the output directory exists inside the workspace
+    echo "Creating container output directory structure..."
+    mkdir -p "$OUTPUT_DIR_STEP1/$SUBJECT_ID/surf"
+    mkdir -p "$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy"
+    
+    # Test that Singularity can write to the output directory
+    echo "Testing Singularity write access..."
+    TEST_FILE="$OUTPUT_DIR_STEP1/.write_test_$$"
+    singularity exec -e $BASE_BINDS \
+        "$SINGULARITY_IMAGE" \
+        bash -c "echo 'write_test' > /workspace/step1_output/.write_test_$$" 2>&1
+    
+    if [ -f "$TEST_FILE" ]; then
+        echo "  [OK] Singularity can write to output directory"
+        rm -f "$TEST_FILE"
+    else
+        echo "ERROR: Singularity cannot write to output directory"
+        echo "  Attempted to create: $TEST_FILE"
+        echo "  This indicates a bind mount or permission issue"
+        echo "  step1_output directory contents:"
+        ls -la "$OUTPUT_DIR_STEP1/" 2>/dev/null
+        exit 1
+    fi
+    
     # Step 1: Native to fsaverage conversion
     echo ""
     echo "[Step 1] Native to fsaverage Conversion"
     echo "==============================================="
-    
-    # Container paths - step1_output is bound to /workspace/step1_output
-    CONTAINER_STEP1_OUTPUT="/workspace/step1_output"
     
     STEP1_CMD="cd /workspace/run_from_freesurfer && ./1_native2fsaverage.sh"
     STEP1_CMD="$STEP1_CMD -s /workspace/freesurfer"
@@ -319,16 +378,21 @@ for HEMISPHERE in lh rh; do
     STEP1_CMD="$STEP1_CMD -i $SUBJECT_ID"
     STEP1_CMD="$STEP1_CMD -o $CONTAINER_STEP1_OUTPUT"
     
+    echo "Running Step 1 command: $STEP1_CMD"
+    echo "Bind mounts: $BASE_BINDS"
+    
+    # Run with verbose output to capture any errors
     singularity exec -e $BASE_BINDS \
         "$SINGULARITY_IMAGE" \
-        bash -c "$STEP1_CMD"
+        bash -c "$STEP1_CMD" 2>&1
     
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Native to fsaverage conversion failed"
+    STEP1_EXIT=$?
+    if [ $STEP1_EXIT -ne 0 ]; then
+        echo "ERROR: Native to fsaverage conversion failed with exit code $STEP1_EXIT"
         exit 1
     fi
     
-    echo "[Step 1] Completed!"
+    echo "[Step 1] Completed with exit code $STEP1_EXIT"
     
     # Sync filesystem to ensure all files are written
     sync
@@ -366,16 +430,19 @@ for HEMISPHERE in lh rh; do
     STEP2_CMD="$STEP2_CMD --subject_id $SUBJECT_ID"
     STEP2_CMD="$STEP2_CMD --output_dir $CONTAINER_STEP1_OUTPUT"
     
+    echo "Running Step 2 command: $STEP2_CMD"
+    
     singularity exec -e $SINGULARITY_BINDS \
         "$SINGULARITY_IMAGE" \
-        bash -c "$STEP2_CMD"
+        bash -c "$STEP2_CMD" 2>&1
     
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Inference failed"
+    STEP2_EXIT=$?
+    if [ $STEP2_EXIT -ne 0 ]; then
+        echo "ERROR: Inference failed with exit code $STEP2_EXIT"
         exit 1
     fi
     
-    echo "[Step 2] Completed!"
+    echo "[Step 2] Completed with exit code $STEP2_EXIT"
     
     # Sync filesystem to ensure all files are written
     sync
@@ -414,16 +481,19 @@ for HEMISPHERE in lh rh; do
     STEP3_CMD="$STEP3_CMD -i $SUBJECT_ID"
     STEP3_CMD="$STEP3_CMD -o $CONTAINER_STEP1_OUTPUT"
     
+    echo "Running Step 3 command: $STEP3_CMD"
+    
     singularity exec -e $SINGULARITY_BINDS \
         "$SINGULARITY_IMAGE" \
-        bash -c "$STEP3_CMD"
+        bash -c "$STEP3_CMD" 2>&1
     
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Fsaverage to native conversion failed"
+    STEP3_EXIT=$?
+    if [ $STEP3_EXIT -ne 0 ]; then
+        echo "ERROR: Fsaverage to native conversion failed with exit code $STEP3_EXIT"
         exit 1
     fi
     
-    echo "[Step 3] Completed!"
+    echo "[Step 3] Completed with exit code $STEP3_EXIT"
     
     # Sync filesystem to ensure all files are written
     sync
