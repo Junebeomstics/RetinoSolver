@@ -158,7 +158,7 @@ eccentricity_*_noMyelin/
 
 # Large data files (should be downloaded separately)
 *.dscalar.nii
-*.surf.gii
+#*.surf.gii
 *.nii
 *.nii.gz
 *.mgz
