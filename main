@@ -267,15 +267,21 @@ for HEMISPHERE in lh rh; do
     STEP1_CMD="$STEP1_CMD -i $SUBJECT_ID"
     STEP1_CMD="$STEP1_CMD -o /workspace/$OUTPUT_DIR_STEP1"
     
+    echo "Executing Step 1 command:"
+    echo "  $STEP1_CMD"
+    echo ""
+    
     singularity exec -e $BASE_BINDS \
         "$SINGULARITY_IMAGE" \
-        bash -c "$STEP1_CMD"
+        bash -c "set -x; $STEP1_CMD"
     
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Native to fsaverage conversion failed"
+    STEP1_EXIT=$?
+    if [ $STEP1_EXIT -ne 0 ]; then
+        echo "ERROR: Native to fsaverage conversion failed with exit code $STEP1_EXIT"
         exit 1
     fi
     
+    echo ""
     echo "[Step 1] Completed!"
     
     # Debug: Check what files were created after Step 1
