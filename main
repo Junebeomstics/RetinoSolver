@@ -53,6 +53,23 @@ PROJECT_ROOT="$SCRIPT_DIR"
 # Try to change directory, but don't fail if already there
 cd "$PROJECT_ROOT" 2>/dev/null || true
 
+# Helper function to convert paths to absolute
+resolve_abs_path() {
+    local path="$1"
+    if command -v realpath >/dev/null 2>&1; then
+        realpath "$path" 2>/dev/null || echo "$path"
+    elif command -v readlink >/dev/null 2>&1; then
+        readlink -f "$path" 2>/dev/null || echo "$path"
+    else
+        # Fallback: if relative path, make it absolute
+        if [[ "$path" != /* ]]; then
+            echo "$(pwd)/$path"
+        else
+            echo "$path"
+        fi
+    fi
+}
+
 # Singularity settings
 SINGULARITY_IMAGE=${SINGULARITY_IMAGE:-"docker://vnmd/deepretinotopy_1.0.18:latest"}
 
@@ -148,19 +165,19 @@ if [ "$MODEL_TYPE" != "baseline" ]; then
     MODEL_NAME="$MODEL_TYPE"
 fi
 
-# Create output directories
-OUTPUT_DIR_FSLR="output_prf_fslr"
-OUTPUT_DIR_NATIVE="output_prf_native"
-OUTPUT_DIR_RAW="output_raw"
-OUTPUT_DIR_STEP1="step1_output"
+# Create output directories (using absolute paths)
+OUTPUT_DIR_FSLR="$(resolve_abs_path "output_prf_fslr")"
+OUTPUT_DIR_NATIVE="$(resolve_abs_path "output_prf_native")"
+OUTPUT_DIR_RAW="$(resolve_abs_path "output_raw")"
+OUTPUT_DIR_STEP1="$(resolve_abs_path "step1_output")"
 mkdir -p "$OUTPUT_DIR_FSLR"
 mkdir -p "$OUTPUT_DIR_NATIVE"
 mkdir -p "$OUTPUT_DIR_RAW"
 mkdir -p "$OUTPUT_DIR_STEP1"
 
-# Create HCP surface directory if it doesn't exist
-# This directory is required for Singularity bind mounting
-mkdir -p "$HCP_SURFACE_DIR"
+# Create HCP surface directory if it doesn't exist (using absolute path)
+HCP_SURFACE_DIR_ABS="$(resolve_abs_path "$HCP_SURFACE_DIR")"
+mkdir -p "$HCP_SURFACE_DIR_ABS"
 
 # Process both hemispheres
 for HEMISPHERE in lh rh; do
@@ -200,78 +217,34 @@ for HEMISPHERE in lh rh; do
         MODEL_SUFFIX=""
     fi
     
-    # Convert paths to absolute for bind mounts
-    # Use readlink -f if realpath is not available
-    if command -v realpath >/dev/null 2>&1; then
-        CHECKPOINT_PATH_ABS="$(realpath "$CHECKPOINT_PATH" 2>/dev/null || echo "$CHECKPOINT_PATH")"
-        HCP_SURFACE_DIR_ABS="$(realpath "$HCP_SURFACE_DIR" 2>/dev/null || echo "$HCP_SURFACE_DIR")"
-        PROJECT_ROOT_ABS="$(realpath "$PROJECT_ROOT" 2>/dev/null || echo "$PROJECT_ROOT")"
-        FREESURFER_SUBJECTS_DIR_ABS="$(realpath "$FREESURFER_SUBJECTS_DIR" 2>/dev/null || echo "$FREESURFER_SUBJECTS_DIR")"
-    elif command -v readlink >/dev/null 2>&1; then
-        CHECKPOINT_PATH_ABS="$(readlink -f "$CHECKPOINT_PATH" 2>/dev/null || echo "$CHECKPOINT_PATH")"
-        HCP_SURFACE_DIR_ABS="$(readlink -f "$HCP_SURFACE_DIR" 2>/dev/null || echo "$HCP_SURFACE_DIR")"
-        PROJECT_ROOT_ABS="$(readlink -f "$PROJECT_ROOT" 2>/dev/null || echo "$PROJECT_ROOT")"
-        FREESURFER_SUBJECTS_DIR_ABS="$(readlink -f "$FREESURFER_SUBJECTS_DIR" 2>/dev/null || echo "$FREESURFER_SUBJECTS_DIR")"
-    else
-        # Fallback: make relative paths absolute
-        if [[ "$CHECKPOINT_PATH" != /* ]]; then
-            CHECKPOINT_PATH_ABS="$(pwd)/$CHECKPOINT_PATH"
-        else
-            CHECKPOINT_PATH_ABS="$CHECKPOINT_PATH"
-        fi
-        if [[ "$HCP_SURFACE_DIR" != /* ]]; then
-            HCP_SURFACE_DIR_ABS="$(pwd)/$HCP_SURFACE_DIR"
-        else
-            HCP_SURFACE_DIR_ABS="$HCP_SURFACE_DIR"
-        fi
-        PROJECT_ROOT_ABS="$PROJECT_ROOT"
-        FREESURFER_SUBJECTS_DIR_ABS="$FREESURFER_SUBJECTS_DIR"
-    fi
+    # Convert all paths to absolute (no bind mounts needed - Singularity can access host paths directly)
+    CHECKPOINT_PATH_ABS="$(resolve_abs_path "$CHECKPOINT_PATH")"
+    PROJECT_ROOT_ABS="$(resolve_abs_path "$PROJECT_ROOT")"
+    FREESURFER_SUBJECTS_DIR_ABS="$(resolve_abs_path "$FREESURFER_SUBJECTS_DIR")"
+    # OUTPUT_DIR_STEP1 is already absolute from above, but ensure it's resolved
+    OUTPUT_DIR_STEP1_ABS="$OUTPUT_DIR_STEP1"
     
-    # Build base Singularity bind mounts: bind everything to workspace
-    # This makes paths consistent and simpler
-    BASE_BINDS="-B $PROJECT_ROOT_ABS:/workspace"
-    BASE_BINDS="$BASE_BINDS -B $FREESURFER_SUBJECTS_DIR_ABS:/workspace/freesurfer"
-    BASE_BINDS="$BASE_BINDS -B $HCP_SURFACE_DIR_ABS:/workspace/surface"
-    
-    # Check if checkpoint needs separate bind mount
-    CHECKPOINT_BASENAME=$(basename "$CHECKPOINT_PATH_ABS")
-    CHECKPOINT_DIR=$(dirname "$CHECKPOINT_PATH_ABS")
-    
-    # Normalize paths for comparison (remove trailing slashes)
-    PROJECT_ROOT_NORM="${PROJECT_ROOT_ABS%/}"
-    CHECKPOINT_DIR_NORM="${CHECKPOINT_DIR%/}"
-    
-    # If checkpoint is within project root, use relative path; otherwise bind it separately
-    if [[ "$CHECKPOINT_DIR_NORM" == "$PROJECT_ROOT_NORM"* ]]; then
-        # Checkpoint is within project root, use relative path
-        CHECKPOINT_REL_PATH="${CHECKPOINT_PATH_ABS#$PROJECT_ROOT_NORM/}"
-        CHECKPOINT_PATH_CONTAINER="/workspace/$CHECKPOINT_REL_PATH"
-        SINGULARITY_BINDS="$BASE_BINDS"
-    else
-        # Checkpoint is outside project root, need separate bind
-        CHECKPOINT_PATH_CONTAINER="/workspace/checkpoint_dir/$CHECKPOINT_BASENAME"
-        SINGULARITY_BINDS="$BASE_BINDS -B $CHECKPOINT_DIR:/workspace/checkpoint_dir"
-    fi
+    # All paths are now absolute - use them directly in container commands
+    # No bind mounts needed - Singularity can access host filesystem directly
     
     # Step 1: Native to fsaverage conversion
     echo ""
     echo "[Step 1] Native to fsaverage Conversion"
     echo "==============================================="
     
-    STEP1_CMD="cd /workspace/run_from_freesurfer && ./1_native2fsaverage.sh"
-    STEP1_CMD="$STEP1_CMD -s /workspace/freesurfer"
-    STEP1_CMD="$STEP1_CMD -t /workspace/surface"
+    STEP1_CMD="cd $PROJECT_ROOT_ABS/run_from_freesurfer && ./1_native2fsaverage.sh"
+    STEP1_CMD="$STEP1_CMD -s $FREESURFER_SUBJECTS_DIR_ABS"
+    STEP1_CMD="$STEP1_CMD -t $HCP_SURFACE_DIR_ABS"
     STEP1_CMD="$STEP1_CMD -h $HEMISPHERE"
     STEP1_CMD="$STEP1_CMD -j $N_JOBS"
     STEP1_CMD="$STEP1_CMD -i $SUBJECT_ID"
-    STEP1_CMD="$STEP1_CMD -o /workspace/$OUTPUT_DIR_STEP1"
+    STEP1_CMD="$STEP1_CMD -o $OUTPUT_DIR_STEP1_ABS"
     
     echo "Executing Step 1 command:"
     echo "  $STEP1_CMD"
     echo ""
     
-    singularity exec -e $BASE_BINDS \
+    singularity exec -e \
         "$SINGULARITY_IMAGE" \
         bash -c "set -x; $STEP1_CMD"
     
@@ -287,8 +260,8 @@ for HEMISPHERE in lh rh; do
     # Debug: Check what files were created after Step 1
     echo ""
     echo "Checking generated files after native2fsaverage conversion..."
-    if [ -d "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/surf" ]; then
-        find "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/surf" -name "*.gii" -o -name "*.mgz" -o -name "*.nii*" 2>/dev/null | head -10
+    if [ -d "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf" ]; then
+        find "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf" -name "*.gii" -o -name "*.mgz" -o -name "*.nii*" 2>/dev/null | head -10
     fi
     
     # Step 2: Inference
@@ -298,17 +271,17 @@ for HEMISPHERE in lh rh; do
     
     # Use Step 1 output directory as freesurfer_dir for Step 2 (to find template files)
     # Step 2 will save results to output_dir if specified
-    STEP2_CMD="python /workspace/Models/run_inference_freesurfer.py"
-    STEP2_CMD="$STEP2_CMD --freesurfer_dir /workspace/$OUTPUT_DIR_STEP1"
-    STEP2_CMD="$STEP2_CMD --checkpoint_path $CHECKPOINT_PATH_CONTAINER"
+    STEP2_CMD="python $PROJECT_ROOT_ABS/Models/run_inference_freesurfer.py"
+    STEP2_CMD="$STEP2_CMD --freesurfer_dir $OUTPUT_DIR_STEP1_ABS"
+    STEP2_CMD="$STEP2_CMD --checkpoint_path $CHECKPOINT_PATH_ABS"
     STEP2_CMD="$STEP2_CMD --model_type $MODEL_TYPE"
     STEP2_CMD="$STEP2_CMD --prediction $PREDICTION"
     STEP2_CMD="$STEP2_CMD --hemisphere $HEMISPHERE_LONG"
     STEP2_CMD="$STEP2_CMD --myelination $MYELINATION"
     STEP2_CMD="$STEP2_CMD --subject_id $SUBJECT_ID"
-    STEP2_CMD="$STEP2_CMD --output_dir /workspace/$OUTPUT_DIR_STEP1"
+    STEP2_CMD="$STEP2_CMD --output_dir $OUTPUT_DIR_STEP1_ABS"
     
-    singularity exec -e $SINGULARITY_BINDS \
+    singularity exec -e \
         "$SINGULARITY_IMAGE" \
         bash -c "$STEP2_CMD"
     
@@ -322,13 +295,13 @@ for HEMISPHERE in lh rh; do
     # Debug: Check what files were created after Step 2
     echo ""
     echo "Checking generated files after inference..."
-    if [ -d "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy" ]; then
-        echo "Files in $PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy:"
-        ls -lah "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy/" 2>/dev/null || echo "  (directory exists but listing failed)"
+    if [ -d "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy" ]; then
+        echo "Files in $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy:"
+        ls -lah "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy/" 2>/dev/null || echo "  (directory exists but listing failed)"
     else
-        echo "WARNING: Directory $PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy does not exist"
+        echo "WARNING: Directory $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy does not exist"
         echo "Searching for any generated files..."
-        find "$PROJECT_ROOT/$OUTPUT_DIR_STEP1" -name "*.func.gii" -type f 2>/dev/null | head -20
+        find "$OUTPUT_DIR_STEP1_ABS" -name "*.func.gii" -type f 2>/dev/null | head -20
     fi
     
     # Step 3: Fsaverage to native conversion
@@ -338,18 +311,18 @@ for HEMISPHERE in lh rh; do
     
     # Step 3 needs to read from Step 1 output (surf files) and Step 2 output (prediction files)
     # Use step1_output as freesurfer_dir and specify output_dir to save results there
-    STEP3_CMD="cd /workspace/run_from_freesurfer && ./2_fsaverage2native.sh"
-    STEP3_CMD="$STEP3_CMD -s /workspace/$OUTPUT_DIR_STEP1"
-    STEP3_CMD="$STEP3_CMD -t /workspace/surface"
+    STEP3_CMD="cd $PROJECT_ROOT_ABS/run_from_freesurfer && ./2_fsaverage2native.sh"
+    STEP3_CMD="$STEP3_CMD -s $OUTPUT_DIR_STEP1_ABS"
+    STEP3_CMD="$STEP3_CMD -t $HCP_SURFACE_DIR_ABS"
     STEP3_CMD="$STEP3_CMD -h $HEMISPHERE"
     STEP3_CMD="$STEP3_CMD -r $PREDICTION"
     STEP3_CMD="$STEP3_CMD -m $MODEL_TYPE"
     STEP3_CMD="$STEP3_CMD -y $MYELINATION"
     STEP3_CMD="$STEP3_CMD -j $N_JOBS"
     STEP3_CMD="$STEP3_CMD -i $SUBJECT_ID"
-    STEP3_CMD="$STEP3_CMD -o /workspace/$OUTPUT_DIR_STEP1"
+    STEP3_CMD="$STEP3_CMD -o $OUTPUT_DIR_STEP1_ABS"
     
-    singularity exec -e $SINGULARITY_BINDS \
+    singularity exec -e \
         "$SINGULARITY_IMAGE" \
         bash -c "$STEP3_CMD"
     
@@ -363,16 +336,16 @@ for HEMISPHERE in lh rh; do
     # Debug: Check what files were created after Step 3
     echo ""
     echo "Checking generated files after native space conversion..."
-    if [ -d "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy" ]; then
-        echo "Files in $PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy:"
-        ls -lah "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy/" 2>/dev/null || echo "  (directory exists but listing failed)"
+    if [ -d "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy" ]; then
+        echo "Files in $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy:"
+        ls -lah "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy/" 2>/dev/null || echo "  (directory exists but listing failed)"
     fi
     
     # Find and copy output files to new directories with renamed files
     # Find and copy final output files before moving intermediate files
     # Find fsaverage space output file (from Step 2)
     FSLR_OUTPUT_PATTERN="${SUBJECT_ID}.predicted_${PREDICTION}_${HEMISPHERE}${MYELIN_SUFFIX}${MODEL_SUFFIX}.func.gii"
-    FSLR_OUTPUT_FILE="$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy/$FSLR_OUTPUT_PATTERN"
+    FSLR_OUTPUT_FILE="$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy/$FSLR_OUTPUT_PATTERN"
     
     if [ -f "$FSLR_OUTPUT_FILE" ]; then
         # Copy to output_prf_fslr with renamed file
@@ -387,7 +360,7 @@ for HEMISPHERE in lh rh; do
         echo "WARNING: Could not find exact match: $FSLR_OUTPUT_FILE"
         # Try to find any matching file with flexible pattern
         echo "Searching for alternative patterns..."
-        FSLR_FOUND=$(find "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy" -name "*predicted*${PREDICTION}*${HEMISPHERE}*.func.gii" -type f 2>/dev/null | grep -v "native" | head -1)
+        FSLR_FOUND=$(find "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy" -name "*predicted*${PREDICTION}*${HEMISPHERE}*.func.gii" -type f 2>/dev/null | grep -v "native" | head -1)
         if [ -n "$FSLR_FOUND" ] && [ -f "$FSLR_FOUND" ]; then
             echo "Found alternative file: $FSLR_FOUND"
             if [ "$HEMISPHERE" == "lh" ]; then
@@ -404,7 +377,7 @@ for HEMISPHERE in lh rh; do
     
     # Find native space output file (from Step 3)
     NATIVE_OUTPUT_PATTERN="${SUBJECT_ID}.predicted_${PREDICTION}_${MODEL_NAME}.${HEMISPHERE}.native.func.gii"
-    NATIVE_OUTPUT_FILE="$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy/$NATIVE_OUTPUT_PATTERN"
+    NATIVE_OUTPUT_FILE="$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy/$NATIVE_OUTPUT_PATTERN"
     
     if [ -f "$NATIVE_OUTPUT_FILE" ]; then
         # Copy to output_prf_native with renamed file
@@ -419,7 +392,7 @@ for HEMISPHERE in lh rh; do
         echo "WARNING: Could not find exact match: $NATIVE_OUTPUT_FILE"
         # Try to find any matching file with flexible pattern
         echo "Searching for alternative patterns..."
-        NATIVE_FOUND=$(find "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID/deepRetinotopy" -name "*predicted*${PREDICTION}*${HEMISPHERE}*native*.func.gii" -type f 2>/dev/null | head -1)
+        NATIVE_FOUND=$(find "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy" -name "*predicted*${PREDICTION}*${HEMISPHERE}*native*.func.gii" -type f 2>/dev/null | head -1)
         if [ -n "$NATIVE_FOUND" ] && [ -f "$NATIVE_FOUND" ]; then
             echo "Found alternative file: $NATIVE_FOUND"
             if [ "$HEMISPHERE" == "lh" ]; then
@@ -440,20 +413,21 @@ done
 # After processing both hemispheres, move all intermediate files to output_raw
 echo ""
 echo "Moving all intermediate files to $OUTPUT_DIR_RAW..."
-if [ -d "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID" ]; then
+# OUTPUT_DIR_STEP1 is already absolute path
+if [ -d "$OUTPUT_DIR_STEP1/$SUBJECT_ID" ]; then
     # Move entire subject directory structure to output_raw
     RAW_SUBJECT_DIR="$OUTPUT_DIR_RAW/$SUBJECT_ID"
     mkdir -p "$RAW_SUBJECT_DIR"
     
     # Move all files and directories from step1_output to output_raw
-    if [ "$(ls -A "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID" 2>/dev/null)" ]; then
+    if [ "$(ls -A "$OUTPUT_DIR_STEP1/$SUBJECT_ID" 2>/dev/null)" ]; then
         # Use rsync or cp+rm to preserve directory structure
-        cp -r "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID"/* "$RAW_SUBJECT_DIR/" 2>/dev/null || true
+        cp -r "$OUTPUT_DIR_STEP1/$SUBJECT_ID"/* "$RAW_SUBJECT_DIR/" 2>/dev/null || true
         # Remove the original directory after successful copy
-        rm -rf "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID" 2>/dev/null || true
+        rm -rf "$OUTPUT_DIR_STEP1/$SUBJECT_ID" 2>/dev/null || true
         echo "All intermediate files moved to $RAW_SUBJECT_DIR"
     else
-        rmdir "$PROJECT_ROOT/$OUTPUT_DIR_STEP1/$SUBJECT_ID" 2>/dev/null || true
+        rmdir "$OUTPUT_DIR_STEP1/$SUBJECT_ID" 2>/dev/null || true
     fi
 fi
 
