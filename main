@@ -253,6 +253,13 @@ for HEMISPHERE in lh rh; do
     
     echo "[Step 1] Completed!"
     
+    # Debug: Check what files were created after Step 1
+    echo ""
+    echo "Checking generated files after native2fsaverage conversion..."
+    if [ -d "$PROJECT_ROOT/$SUBJECT_ID" ]; then
+        find "$PROJECT_ROOT/$SUBJECT_ID" -name "*.gii" -o -name "*.mgz" -o -name "*.nii*" 2>/dev/null | head -10
+    fi
+    
     # Step 2: Inference
     echo ""
     echo "[Step 2] Running Inference"
@@ -288,6 +295,18 @@ for HEMISPHERE in lh rh; do
     
     echo "[Step 2] Completed!"
     
+    # Debug: Check what files were created after Step 2
+    echo ""
+    echo "Checking generated files after inference..."
+    if [ -d "$PROJECT_ROOT/$SUBJECT_ID/deepRetinotopy" ]; then
+        echo "Files in $PROJECT_ROOT/$SUBJECT_ID/deepRetinotopy:"
+        ls -lah "$PROJECT_ROOT/$SUBJECT_ID/deepRetinotopy/" 2>/dev/null || echo "  (directory exists but listing failed)"
+    else
+        echo "WARNING: Directory $PROJECT_ROOT/$SUBJECT_ID/deepRetinotopy does not exist"
+        echo "Searching for any generated files..."
+        find "$PROJECT_ROOT" -name "*.func.gii" -type f 2>/dev/null | head -20
+    fi
+    
     # Step 3: Fsaverage to native conversion
     echo ""
     echo "[Step 3] Fsaverage to Native Space Conversion"
@@ -319,6 +338,14 @@ for HEMISPHERE in lh rh; do
     
     echo "[Step 3] Completed!"
     
+    # Debug: Check what files were created after Step 3
+    echo ""
+    echo "Checking generated files after native space conversion..."
+    if [ -d "$PROJECT_ROOT/$SUBJECT_ID/deepRetinotopy" ]; then
+        echo "Files in $PROJECT_ROOT/$SUBJECT_ID/deepRetinotopy:"
+        ls -lah "$PROJECT_ROOT/$SUBJECT_ID/deepRetinotopy/" 2>/dev/null || echo "  (directory exists but listing failed)"
+    fi
+    
     # Find and copy output files to new directories with renamed files
     # Find and copy final output files before moving intermediate files
     # Find fsaverage space output file (from Step 2)
@@ -335,7 +362,22 @@ for HEMISPHERE in lh rh; do
             echo "Copied fsaverage space file to $OUTPUT_DIR_FSLR/right.gii"
         fi
     else
-        echo "WARNING: Could not find fsaverage space output file: $FSLR_OUTPUT_FILE"
+        echo "WARNING: Could not find exact match: $FSLR_OUTPUT_FILE"
+        # Try to find any matching file with flexible pattern
+        echo "Searching for alternative patterns..."
+        FSLR_FOUND=$(find "$PROJECT_ROOT/$SUBJECT_ID/deepRetinotopy" -name "*predicted*${PREDICTION}*${HEMISPHERE}*.func.gii" -type f 2>/dev/null | grep -v "native" | head -1)
+        if [ -n "$FSLR_FOUND" ] && [ -f "$FSLR_FOUND" ]; then
+            echo "Found alternative file: $FSLR_FOUND"
+            if [ "$HEMISPHERE" == "lh" ]; then
+                cp "$FSLR_FOUND" "$OUTPUT_DIR_FSLR/left.gii"
+                echo "Copied fsaverage space file to $OUTPUT_DIR_FSLR/left.gii"
+            else
+                cp "$FSLR_FOUND" "$OUTPUT_DIR_FSLR/right.gii"
+                echo "Copied fsaverage space file to $OUTPUT_DIR_FSLR/right.gii"
+            fi
+        else
+            echo "ERROR: Could not find fsaverage space output file for $HEMISPHERE"
+        fi
     fi
     
     # Find native space output file (from Step 3)
@@ -352,7 +394,22 @@ for HEMISPHERE in lh rh; do
             echo "Copied native space file to $OUTPUT_DIR_NATIVE/right.gii"
         fi
     else
-        echo "WARNING: Could not find native space output file: $NATIVE_OUTPUT_FILE"
+        echo "WARNING: Could not find exact match: $NATIVE_OUTPUT_FILE"
+        # Try to find any matching file with flexible pattern
+        echo "Searching for alternative patterns..."
+        NATIVE_FOUND=$(find "$PROJECT_ROOT/$SUBJECT_ID/deepRetinotopy" -name "*predicted*${PREDICTION}*${HEMISPHERE}*native*.func.gii" -type f 2>/dev/null | head -1)
+        if [ -n "$NATIVE_FOUND" ] && [ -f "$NATIVE_FOUND" ]; then
+            echo "Found alternative file: $NATIVE_FOUND"
+            if [ "$HEMISPHERE" == "lh" ]; then
+                cp "$NATIVE_FOUND" "$OUTPUT_DIR_NATIVE/left.gii"
+                echo "Copied native space file to $OUTPUT_DIR_NATIVE/left.gii"
+            else
+                cp "$NATIVE_FOUND" "$OUTPUT_DIR_NATIVE/right.gii"
+                echo "Copied native space file to $OUTPUT_DIR_NATIVE/right.gii"
+            fi
+        else
+            echo "ERROR: Could not find native space output file for $HEMISPHERE"
+        fi
     fi
     
     echo "Hemisphere $HEMISPHERE processing completed!"
@@ -380,8 +437,58 @@ fi
 
 echo ""
 echo "==============================================="
-echo "Full Pipeline Completed Successfully!"
+echo "Full Pipeline Completed!"
 echo "==============================================="
+
+# Verify output files were created
+echo ""
+echo "Verifying output files..."
+FSLR_LEFT="$OUTPUT_DIR_FSLR/left.gii"
+FSLR_RIGHT="$OUTPUT_DIR_FSLR/right.gii"
+NATIVE_LEFT="$OUTPUT_DIR_NATIVE/left.gii"
+NATIVE_RIGHT="$OUTPUT_DIR_NATIVE/right.gii"
+
+SUCCESS=true
+echo "FSLR space outputs:"
+if [ -f "$FSLR_LEFT" ]; then
+    echo "  ✓ left.gii ($(du -h "$FSLR_LEFT" | cut -f1))"
+else
+    echo "  ✗ left.gii (MISSING)"
+    SUCCESS=false
+fi
+if [ -f "$FSLR_RIGHT" ]; then
+    echo "  ✓ right.gii ($(du -h "$FSLR_RIGHT" | cut -f1))"
+else
+    echo "  ✗ right.gii (MISSING)"
+    SUCCESS=false
+fi
+
+echo "Native space outputs:"
+if [ -f "$NATIVE_LEFT" ]; then
+    echo "  ✓ left.gii ($(du -h "$NATIVE_LEFT" | cut -f1))"
+else
+    echo "  ✗ left.gii (MISSING)"
+    SUCCESS=false
+fi
+if [ -f "$NATIVE_RIGHT" ]; then
+    echo "  ✓ right.gii ($(du -h "$NATIVE_RIGHT" | cut -f1))"
+else
+    echo "  ✗ right.gii (MISSING)"
+    SUCCESS=false
+fi
+
+echo ""
+if [ "$SUCCESS" = true ]; then
+    echo "Status: SUCCESS - All output files generated"
+else
+    echo "Status: INCOMPLETE - Some output files are missing"
+    echo ""
+    echo "Debugging: Listing all .gii files in output directories..."
+    find "$OUTPUT_DIR_FSLR" "$OUTPUT_DIR_NATIVE" -name "*.gii" -type f 2>/dev/null
+    exit 1
+fi
+
+echo ""
 echo "Results are available in:"
 echo "  - FSLR space: $OUTPUT_DIR_FSLR/"
 echo "  - Native space: $OUTPUT_DIR_NATIVE/"
