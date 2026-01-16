@@ -232,7 +232,15 @@ for HEMISPHERE in lh rh; do
     echo "[Step 1] Native to fsaverage Conversion"
     echo "==============================================="
     
-    STEP1_CMD="cd $PROJECT_ROOT_ABS/run_from_freesurfer && ./1_native2fsaverage.sh"
+    STEP1_SCRIPT="$PROJECT_ROOT_ABS/run_from_freesurfer/1_native2fsaverage.sh"
+    
+    # Verify script exists before execution
+    if [ ! -f "$STEP1_SCRIPT" ]; then
+        echo "ERROR: Step 1 script not found: $STEP1_SCRIPT"
+        exit 1
+    fi
+    
+    STEP1_CMD="bash $STEP1_SCRIPT"
     STEP1_CMD="$STEP1_CMD -s $FREESURFER_SUBJECTS_DIR_ABS"
     STEP1_CMD="$STEP1_CMD -t $HCP_SURFACE_DIR_ABS"
     STEP1_CMD="$STEP1_CMD -h $HEMISPHERE"
@@ -241,12 +249,14 @@ for HEMISPHERE in lh rh; do
     STEP1_CMD="$STEP1_CMD -o $OUTPUT_DIR_STEP1_ABS"
     
     echo "Executing Step 1 command:"
-    echo "  $STEP1_CMD"
+    echo "  Script: $STEP1_SCRIPT"
+    echo "  Full command: $STEP1_CMD"
     echo ""
     
+    # Execute and capture both stdout and stderr
     singularity exec -e \
         "$SINGULARITY_IMAGE" \
-        bash -c "set -x; $STEP1_CMD"
+        bash -c "$STEP1_CMD" 2>&1
     
     STEP1_EXIT=$?
     if [ $STEP1_EXIT -ne 0 ]; then
@@ -281,12 +291,17 @@ for HEMISPHERE in lh rh; do
     STEP2_CMD="$STEP2_CMD --subject_id $SUBJECT_ID"
     STEP2_CMD="$STEP2_CMD --output_dir $OUTPUT_DIR_STEP1_ABS"
     
+    echo "Executing Step 2 command:"
+    echo "  $STEP2_CMD"
+    echo ""
+    
     singularity exec -e \
         "$SINGULARITY_IMAGE" \
-        bash -c "$STEP2_CMD"
+        bash -c "$STEP2_CMD" 2>&1
     
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Inference failed"
+    STEP2_EXIT=$?
+    if [ $STEP2_EXIT -ne 0 ]; then
+        echo "ERROR: Inference failed with exit code $STEP2_EXIT"
         exit 1
     fi
     
@@ -311,7 +326,15 @@ for HEMISPHERE in lh rh; do
     
     # Step 3 needs to read from Step 1 output (surf files) and Step 2 output (prediction files)
     # Use step1_output as freesurfer_dir and specify output_dir to save results there
-    STEP3_CMD="cd $PROJECT_ROOT_ABS/run_from_freesurfer && ./2_fsaverage2native.sh"
+    STEP3_SCRIPT="$PROJECT_ROOT_ABS/run_from_freesurfer/2_fsaverage2native.sh"
+    
+    # Verify script exists before execution
+    if [ ! -f "$STEP3_SCRIPT" ]; then
+        echo "ERROR: Step 3 script not found: $STEP3_SCRIPT"
+        exit 1
+    fi
+    
+    STEP3_CMD="bash $STEP3_SCRIPT"
     STEP3_CMD="$STEP3_CMD -s $OUTPUT_DIR_STEP1_ABS"
     STEP3_CMD="$STEP3_CMD -t $HCP_SURFACE_DIR_ABS"
     STEP3_CMD="$STEP3_CMD -h $HEMISPHERE"
@@ -322,12 +345,18 @@ for HEMISPHERE in lh rh; do
     STEP3_CMD="$STEP3_CMD -i $SUBJECT_ID"
     STEP3_CMD="$STEP3_CMD -o $OUTPUT_DIR_STEP1_ABS"
     
+    echo "Executing Step 3 command:"
+    echo "  Script: $STEP3_SCRIPT"
+    echo "  Full command: $STEP3_CMD"
+    echo ""
+    
     singularity exec -e \
         "$SINGULARITY_IMAGE" \
-        bash -c "$STEP3_CMD"
+        bash -c "$STEP3_CMD" 2>&1
     
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Fsaverage to native conversion failed"
+    STEP3_EXIT=$?
+    if [ $STEP3_EXIT -ne 0 ]; then
+        echo "ERROR: Fsaverage to native conversion failed with exit code $STEP3_EXIT"
         exit 1
     fi
     
