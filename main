@@ -412,16 +412,6 @@ for HEMISPHERE in lh rh; do
     
     # Use Step 1 output directory as freesurfer_dir for Step 2 (to find template files)
     # Step 2 will save results to output_dir if specified
-    STEP2_CMD="python $PROJECT_ROOT_ABS/Models/run_inference_freesurfer.py"
-    STEP2_CMD="$STEP2_CMD --freesurfer_dir $OUTPUT_DIR_STEP1_ABS"
-    STEP2_CMD="$STEP2_CMD --checkpoint_path $CHECKPOINT_PATH_ABS"
-    STEP2_CMD="$STEP2_CMD --model_type $MODEL_TYPE"
-    STEP2_CMD="$STEP2_CMD --prediction $PREDICTION"
-    STEP2_CMD="$STEP2_CMD --hemisphere $HEMISPHERE_LONG"
-    STEP2_CMD="$STEP2_CMD --myelination $MYELINATION"
-    STEP2_CMD="$STEP2_CMD --subject_id $SUBJECT_ID"
-    STEP2_CMD="$STEP2_CMD --output_dir $OUTPUT_DIR_STEP1_ABS"
-    
     echo "Executing Step 2 command:"
     echo "  python $PROJECT_ROOT_ABS/Models/run_inference_freesurfer.py"
     echo "  Arguments:"
@@ -438,19 +428,15 @@ for HEMISPHERE in lh rh; do
     echo "Running Step 2 (inference)..."
     echo "--- Step 2 Output (real-time) ---"
     
-    # Use Python -u flag for unbuffered output so logs appear in real-time
-    # Output is displayed directly without buffering
+    # IMPORTANT: Each singularity exec creates an independent session.
+    # Packages installed in previous sessions are NOT available.
+    # We need to install einops in the SAME session as the Python script execution.
+    # This is an exception to the "no bash -c" rule because we need to chain commands.
+    # Alternative: Create a wrapper script, but this is simpler for now.
+    echo "Installing einops and running inference..."
     cd "$PROJECT_ROOT_ABS" && singularity exec -e \
         "$SINGULARITY_IMAGE" \
-        python -u "$PROJECT_ROOT_ABS/Models/run_inference_freesurfer.py" \
-        --freesurfer_dir "$OUTPUT_DIR_STEP1_ABS" \
-        --checkpoint_path "$CHECKPOINT_PATH_ABS" \
-        --model_type "$MODEL_TYPE" \
-        --prediction "$PREDICTION" \
-        --hemisphere "$HEMISPHERE_LONG" \
-        --myelination "$MYELINATION" \
-        --subject_id "$SUBJECT_ID" \
-        --output_dir "$OUTPUT_DIR_STEP1_ABS" 2>&1
+        bash -c "pip install --quiet --no-cache-dir einops > /dev/null 2>&1 && python -u \"$PROJECT_ROOT_ABS/Models/run_inference_freesurfer.py\" --freesurfer_dir \"$OUTPUT_DIR_STEP1_ABS\" --checkpoint_path \"$CHECKPOINT_PATH_ABS\" --model_type \"$MODEL_TYPE\" --prediction \"$PREDICTION\" --hemisphere \"$HEMISPHERE_LONG\" --myelination \"$MYELINATION\" --subject_id \"$SUBJECT_ID\" --output_dir \"$OUTPUT_DIR_STEP1_ABS\"" 2>&1
     
     STEP2_EXIT=$?
     
