@@ -325,31 +325,51 @@ for HEMISPHERE in lh rh; do
         exit 1
     fi
     
-    STEP1_CMD="bash $STEP1_SCRIPT"
-    STEP1_CMD="$STEP1_CMD -s $FREESURFER_SUBJECTS_DIR_ABS"
-    STEP1_CMD="$STEP1_CMD -t $HCP_SURFACE_DIR_ABS"
-    STEP1_CMD="$STEP1_CMD -h $HEMISPHERE"
-    STEP1_CMD="$STEP1_CMD -j $N_JOBS"
-    STEP1_CMD="$STEP1_CMD -i $SUBJECT_ID"
-    STEP1_CMD="$STEP1_CMD -o $OUTPUT_DIR_STEP1_ABS"
+    # Build Step 1 command - use absolute paths
+    # IMPORTANT: Execute script directly without bash -c wrapper
+    # This matches the pattern used in other brainlife.io apps
+    # Other apps use: singularity exec -e docker://... ./script.sh
+    # We should use: singularity exec -e IMAGE ./script.sh args...
     
     echo "Executing Step 1 command:"
     echo "  Script: $STEP1_SCRIPT"
-    echo "  Full command: $STEP1_CMD"
+    echo "  Arguments:"
+    echo "    -s $FREESURFER_SUBJECTS_DIR_ABS"
+    echo "    -t $HCP_SURFACE_DIR_ABS"
+    echo "    -h $HEMISPHERE"
+    echo "    -j $N_JOBS"
+    echo "    -i $SUBJECT_ID"
+    echo "    -o $OUTPUT_DIR_STEP1_ABS"
     echo ""
     
-    # Execute and capture both stdout and stderr
+    # Execute script directly (like other brainlife.io apps)
+    # Change to project root directory inside container before executing
+    # This ensures relative paths work correctly
     echo "Running Step 1 (this may take several minutes)..."
-    STEP1_OUTPUT=$(singularity exec -e \
+    STEP1_OUTPUT=$(cd "$PROJECT_ROOT_ABS" && singularity exec -e \
         "$SINGULARITY_IMAGE" \
-        bash -c "$STEP1_CMD" 2>&1)
+        "$STEP1_SCRIPT" \
+        -s "$FREESURFER_SUBJECTS_DIR_ABS" \
+        -t "$HCP_SURFACE_DIR_ABS" \
+        -h "$HEMISPHERE" \
+        -j "$N_JOBS" \
+        -i "$SUBJECT_ID" \
+        -o "$OUTPUT_DIR_STEP1_ABS" 2>&1)
     
     STEP1_EXIT=$?
     
-    # Display Step 1 output (last 50 lines to avoid overwhelming output)
+    # Display Step 1 output - show first 20 lines and last 50 lines
+    echo "--- Step 1 Output (first 20 lines) ---"
+    echo "$STEP1_OUTPUT" | head -20
     echo "--- Step 1 Output (last 50 lines) ---"
     echo "$STEP1_OUTPUT" | tail -50
     echo "--- End of Step 1 Output ---"
+    
+    # Check if Step 1 script actually produced any output
+    if [ -z "$STEP1_OUTPUT" ] || [ -z "$(echo "$STEP1_OUTPUT" | grep -v '^INFO:' | grep -v '^WARNING:' | grep -v 'Using custom Singularity' | grep -v 'Cache:' | grep -v '^\+' | grep -v '^\[.*\]' | grep -v '^echo' | grep -v '^/usr/bin/singularity')" ]; then
+        echo "WARNING: Step 1 script may not have produced any meaningful output!"
+        echo "This could indicate the script did not execute properly."
+    fi
     
     if [ $STEP1_EXIT -ne 0 ]; then
         echo "ERROR: Native to fsaverage conversion failed with exit code $STEP1_EXIT"
@@ -403,13 +423,30 @@ for HEMISPHERE in lh rh; do
     STEP2_CMD="$STEP2_CMD --output_dir $OUTPUT_DIR_STEP1_ABS"
     
     echo "Executing Step 2 command:"
-    echo "  $STEP2_CMD"
+    echo "  python $PROJECT_ROOT_ABS/Models/run_inference_freesurfer.py"
+    echo "  Arguments:"
+    echo "    --freesurfer_dir $OUTPUT_DIR_STEP1_ABS"
+    echo "    --checkpoint_path $CHECKPOINT_PATH_ABS"
+    echo "    --model_type $MODEL_TYPE"
+    echo "    --prediction $PREDICTION"
+    echo "    --hemisphere $HEMISPHERE_LONG"
+    echo "    --myelination $MYELINATION"
+    echo "    --subject_id $SUBJECT_ID"
+    echo "    --output_dir $OUTPUT_DIR_STEP1_ABS"
     echo ""
     
     echo "Running Step 2 (inference)..."
-    STEP2_OUTPUT=$(singularity exec -e \
+    STEP2_OUTPUT=$(cd "$PROJECT_ROOT_ABS" && singularity exec -e \
         "$SINGULARITY_IMAGE" \
-        bash -c "$STEP2_CMD" 2>&1)
+        python "$PROJECT_ROOT_ABS/Models/run_inference_freesurfer.py" \
+        --freesurfer_dir "$OUTPUT_DIR_STEP1_ABS" \
+        --checkpoint_path "$CHECKPOINT_PATH_ABS" \
+        --model_type "$MODEL_TYPE" \
+        --prediction "$PREDICTION" \
+        --hemisphere "$HEMISPHERE_LONG" \
+        --myelination "$MYELINATION" \
+        --subject_id "$SUBJECT_ID" \
+        --output_dir "$OUTPUT_DIR_STEP1_ABS" 2>&1)
     
     STEP2_EXIT=$?
     
@@ -462,26 +499,33 @@ for HEMISPHERE in lh rh; do
         exit 1
     fi
     
-    STEP3_CMD="bash $STEP3_SCRIPT"
-    STEP3_CMD="$STEP3_CMD -s $OUTPUT_DIR_STEP1_ABS"
-    STEP3_CMD="$STEP3_CMD -t $HCP_SURFACE_DIR_ABS"
-    STEP3_CMD="$STEP3_CMD -h $HEMISPHERE"
-    STEP3_CMD="$STEP3_CMD -r $PREDICTION"
-    STEP3_CMD="$STEP3_CMD -m $MODEL_TYPE"
-    STEP3_CMD="$STEP3_CMD -y $MYELINATION"
-    STEP3_CMD="$STEP3_CMD -j $N_JOBS"
-    STEP3_CMD="$STEP3_CMD -i $SUBJECT_ID"
-    STEP3_CMD="$STEP3_CMD -o $OUTPUT_DIR_STEP1_ABS"
-    
     echo "Executing Step 3 command:"
     echo "  Script: $STEP3_SCRIPT"
-    echo "  Full command: $STEP3_CMD"
+    echo "  Arguments:"
+    echo "    -s $OUTPUT_DIR_STEP1_ABS"
+    echo "    -t $HCP_SURFACE_DIR_ABS"
+    echo "    -h $HEMISPHERE"
+    echo "    -r $PREDICTION"
+    echo "    -m $MODEL_TYPE"
+    echo "    -y $MYELINATION"
+    echo "    -j $N_JOBS"
+    echo "    -i $SUBJECT_ID"
+    echo "    -o $OUTPUT_DIR_STEP1_ABS"
     echo ""
     
     echo "Running Step 3 (fsaverage to native conversion)..."
-    STEP3_OUTPUT=$(singularity exec -e \
+    STEP3_OUTPUT=$(cd "$PROJECT_ROOT_ABS" && singularity exec -e \
         "$SINGULARITY_IMAGE" \
-        bash -c "$STEP3_CMD" 2>&1)
+        "$STEP3_SCRIPT" \
+        -s "$OUTPUT_DIR_STEP1_ABS" \
+        -t "$HCP_SURFACE_DIR_ABS" \
+        -h "$HEMISPHERE" \
+        -r "$PREDICTION" \
+        -m "$MODEL_TYPE" \
+        -y "$MYELINATION" \
+        -j "$N_JOBS" \
+        -i "$SUBJECT_ID" \
+        -o "$OUTPUT_DIR_STEP1_ABS" 2>&1)
     
     STEP3_EXIT=$?
     
