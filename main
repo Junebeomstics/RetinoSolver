@@ -2,7 +2,7 @@
 #PBS -l nodes=1:ppn=8,walltime=3:00:00
 #PBS -N app-deepRetinotopy
 #PBS -V
-set -xe
+set -e  # Exit on error (remove -x to avoid verbose command logging)
 
 # Brainlife app for deepRetinotopy inference pipeline
 # Based on run_deepRetinotopy_freesurfer_with_docker.sh
@@ -71,7 +71,61 @@ resolve_abs_path() {
 }
 
 # Singularity settings
-SINGULARITY_IMAGE=${SINGULARITY_IMAGE:-"docker://vnmd/deepretinotopy_1.0.18:latest"}
+# Strategy: Use local Docker image if available, save to tar and convert to SIF
+# This avoids network access when Docker image is already present
+DOCKER_IMAGE_NAME="vnmd/deepretinotopy_1.0.18:latest"
+SIF_IMAGE_NAME="deepretinotopy_1.0.18.sif"
+SIF_IMAGE_PATH="$PROJECT_ROOT/$SIF_IMAGE_NAME"
+DOCKER_TAR_NAME="deepretinotopy_1.0.18.tar"
+DOCKER_TAR_PATH="$PROJECT_ROOT/$DOCKER_TAR_NAME"
+
+# Check if SIF file already exists
+if [ -f "$SIF_IMAGE_PATH" ]; then
+    echo "Found existing SIF file: $SIF_IMAGE_PATH"
+    SINGULARITY_IMAGE="$SIF_IMAGE_PATH"
+elif command -v docker >/dev/null 2>&1 && docker image inspect "$DOCKER_IMAGE_NAME" >/dev/null 2>&1; then
+    echo "Found local Docker image: $DOCKER_IMAGE_NAME"
+    
+    # Check if singularity or apptainer command is available
+    if command -v apptainer >/dev/null 2>&1; then
+        CONTAINER_CMD="apptainer"
+    elif command -v singularity >/dev/null 2>&1; then
+        CONTAINER_CMD="singularity"
+    else
+        echo "ERROR: Neither apptainer nor singularity command found"
+        exit 1
+    fi
+    
+    # Check if tar file exists, if not create it from Docker image
+    if [ ! -f "$DOCKER_TAR_PATH" ]; then
+        echo "Saving Docker image to tar file (this may take a few minutes)..."
+        if ! docker save "$DOCKER_IMAGE_NAME" -o "$DOCKER_TAR_PATH"; then
+            echo "ERROR: Failed to save Docker image to tar file"
+            exit 1
+        fi
+        echo "Docker image saved to: $DOCKER_TAR_PATH"
+    else
+        echo "Found existing Docker tar file: $DOCKER_TAR_PATH"
+    fi
+    
+    # Convert tar file to SIF
+    echo "Converting Docker tar to SIF format (this may take a few minutes)..."
+    if $CONTAINER_CMD build --force "$SIF_IMAGE_PATH" "docker-archive://${DOCKER_TAR_PATH}" 2>&1; then
+        echo "Successfully converted Docker image to SIF: $SIF_IMAGE_PATH"
+        SINGULARITY_IMAGE="$SIF_IMAGE_PATH"
+        # Optionally remove tar file to save space (uncomment if desired)
+        rm -f "$DOCKER_TAR_PATH"
+    else
+        echo "ERROR: Failed to convert Docker tar to SIF"
+        exit 1
+    fi
+else
+    echo "Local Docker image not found: $DOCKER_IMAGE_NAME"
+    echo "Will use docker:// (requires network access to Docker Hub)"
+    SINGULARITY_IMAGE="docker://${DOCKER_IMAGE_NAME}"
+fi
+
+echo "Using container image: $SINGULARITY_IMAGE"
 
 # Default parameters
 HCP_SURFACE_DIR="surface"
@@ -253,26 +307,12 @@ for HEMISPHERE in lh rh; do
     echo "  Full command: $STEP1_CMD"
     echo ""
     
-    # Verify script is accessible inside container
-    echo "Verifying script accessibility in container..."
-    singularity exec -e \
-        "$SINGULARITY_IMAGE" \
-        bash -c "test -f '$STEP1_SCRIPT' && echo 'Script found' || echo 'Script NOT found: $STEP1_SCRIPT'" 2>&1
-    
-    echo ""
-    echo "Starting Step 1 execution..."
-    echo "----------------------------------------"
-    
     # Execute and capture both stdout and stderr
-    # Use unbuffered output to ensure script echo statements are visible
     singularity exec -e \
         "$SINGULARITY_IMAGE" \
-        bash -c "stdbuf -oL -eL $STEP1_CMD" 2>&1
+        bash -c "$STEP1_CMD" 2>&1
     
     STEP1_EXIT=$?
-    
-    echo "----------------------------------------"
-    echo "Step 1 exit code: $STEP1_EXIT"
     if [ $STEP1_EXIT -ne 0 ]; then
         echo "ERROR: Native to fsaverage conversion failed with exit code $STEP1_EXIT"
         exit 1
@@ -311,10 +351,9 @@ for HEMISPHERE in lh rh; do
     
     singularity exec -e \
         "$SINGULARITY_IMAGE" \
-        bash -c "stdbuf -oL -eL $STEP2_CMD" 2>&1
+        bash -c "$STEP2_CMD" 2>&1
     
     STEP2_EXIT=$?
-    echo "Step 2 exit code: $STEP2_EXIT"
     if [ $STEP2_EXIT -ne 0 ]; then
         echo "ERROR: Inference failed with exit code $STEP2_EXIT"
         exit 1
@@ -367,10 +406,9 @@ for HEMISPHERE in lh rh; do
     
     singularity exec -e \
         "$SINGULARITY_IMAGE" \
-        bash -c "stdbuf -oL -eL $STEP3_CMD" 2>&1
+        bash -c "$STEP3_CMD" 2>&1
     
     STEP3_EXIT=$?
-    echo "Step 3 exit code: $STEP3_EXIT"
     if [ $STEP3_EXIT -ne 0 ]; then
         echo "ERROR: Fsaverage to native conversion failed with exit code $STEP3_EXIT"
         exit 1
