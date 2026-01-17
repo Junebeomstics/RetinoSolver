@@ -233,6 +233,37 @@ mkdir -p "$OUTPUT_DIR_STEP1"
 HCP_SURFACE_DIR_ABS="$(resolve_abs_path "$HCP_SURFACE_DIR")"
 mkdir -p "$HCP_SURFACE_DIR_ABS"
 
+# Check if einops is already installed, install if missing
+echo "Checking for einops package in container..."
+CHECK_CMD="python -c 'import einops; print(\"einops is installed\")' 2>&1"
+singularity exec -e \
+    "$SINGULARITY_IMAGE" \
+    bash -c "$CHECK_CMD" > /dev/null 2>&1
+
+if [ $? -eq 0 ]; then
+    echo "✓ einops is already installed"
+else
+    echo "einops not found. Attempting to install..."
+    INSTALL_CMD="pip install --quiet --no-cache-dir einops 2>&1"
+    INSTALL_OUTPUT=$(singularity exec -e \
+        "$SINGULARITY_IMAGE" \
+        bash -c "$INSTALL_CMD" 2>&1)
+    INSTALL_EXIT=$?
+    
+    if [ $INSTALL_EXIT -eq 0 ]; then
+        echo "✓ einops installed successfully"
+    else
+        echo "Warning: Failed to install einops (network may be unavailable)"
+        echo "  Attempting to continue - einops may already be available in the image"
+        # Try to verify if it's actually available despite install failure
+        VERIFY_CMD="python -c 'import einops' 2>&1"
+        if singularity exec -e "$SINGULARITY_IMAGE" bash -c "$VERIFY_CMD" > /dev/null 2>&1; then
+            echo "✓ einops is actually available (was already installed)"
+        fi
+    fi
+fi
+echo ""
+
 # Process both hemispheres
 for HEMISPHERE in lh rh; do
     echo ""
@@ -308,13 +339,22 @@ for HEMISPHERE in lh rh; do
     echo ""
     
     # Execute and capture both stdout and stderr
-    singularity exec -e \
+    echo "Running Step 1 (this may take several minutes)..."
+    STEP1_OUTPUT=$(singularity exec -e \
         "$SINGULARITY_IMAGE" \
-        bash -c "$STEP1_CMD" 2>&1
+        bash -c "$STEP1_CMD" 2>&1)
     
     STEP1_EXIT=$?
+    
+    # Display Step 1 output (last 50 lines to avoid overwhelming output)
+    echo "--- Step 1 Output (last 50 lines) ---"
+    echo "$STEP1_OUTPUT" | tail -50
+    echo "--- End of Step 1 Output ---"
+    
     if [ $STEP1_EXIT -ne 0 ]; then
         echo "ERROR: Native to fsaverage conversion failed with exit code $STEP1_EXIT"
+        echo "Full Step 1 output:"
+        echo "$STEP1_OUTPUT"
         exit 1
     fi
     
@@ -324,8 +364,25 @@ for HEMISPHERE in lh rh; do
     # Debug: Check what files were created after Step 1
     echo ""
     echo "Checking generated files after native2fsaverage conversion..."
-    if [ -d "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf" ]; then
-        find "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf" -name "*.gii" -o -name "*.mgz" -o -name "*.nii*" 2>/dev/null | head -10
+    echo "Expected output directory: $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf"
+    
+    # Check if output directory exists
+    if [ ! -d "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID" ]; then
+        echo "WARNING: Subject output directory does not exist: $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID"
+        echo "Listing contents of step1_output:"
+        ls -la "$OUTPUT_DIR_STEP1_ABS/" 2>/dev/null || echo "  (directory does not exist or cannot be accessed)"
+    elif [ ! -d "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf" ]; then
+        echo "WARNING: Surf directory does not exist: $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf"
+        echo "Listing contents of subject directory:"
+        ls -la "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/" 2>/dev/null || echo "  (cannot list directory)"
+    else
+        echo "Found surf directory. Listing generated files:"
+        find "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf" -type f \( -name "*.gii" -o -name "*.mgz" -o -name "*.nii*" \) 2>/dev/null | head -20
+        if [ $? -ne 0 ] || [ -z "$(find "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf" -type f \( -name "*.gii" -o -name "*.mgz" -o -name "*.nii*" \) 2>/dev/null | head -1)" ]; then
+            echo "WARNING: No .gii, .mgz, or .nii files found in surf directory"
+            echo "Listing all files in surf directory:"
+            ls -la "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf/" 2>/dev/null || echo "  (cannot list directory)"
+        fi
     fi
     
     # Step 2: Inference
@@ -349,13 +406,22 @@ for HEMISPHERE in lh rh; do
     echo "  $STEP2_CMD"
     echo ""
     
-    singularity exec -e \
+    echo "Running Step 2 (inference)..."
+    STEP2_OUTPUT=$(singularity exec -e \
         "$SINGULARITY_IMAGE" \
-        bash -c "$STEP2_CMD" 2>&1
+        bash -c "$STEP2_CMD" 2>&1)
     
     STEP2_EXIT=$?
+    
+    # Display Step 2 output (last 50 lines to avoid overwhelming output)
+    echo "--- Step 2 Output (last 50 lines) ---"
+    echo "$STEP2_OUTPUT" | tail -50
+    echo "--- End of Step 2 Output ---"
+    
     if [ $STEP2_EXIT -ne 0 ]; then
         echo "ERROR: Inference failed with exit code $STEP2_EXIT"
+        echo "Full Step 2 output:"
+        echo "$STEP2_OUTPUT"
         exit 1
     fi
     
@@ -364,12 +430,20 @@ for HEMISPHERE in lh rh; do
     # Debug: Check what files were created after Step 2
     echo ""
     echo "Checking generated files after inference..."
+    echo "Expected output directory: $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy"
+    
     if [ -d "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy" ]; then
-        echo "Files in $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy:"
+        echo "Found deepRetinotopy directory. Listing files:"
         ls -lah "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy/" 2>/dev/null || echo "  (directory exists but listing failed)"
+        echo ""
+        echo "Searching for prediction files:"
+        find "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy" -name "*.func.gii" -type f 2>/dev/null | head -20
     else
         echo "WARNING: Directory $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy does not exist"
-        echo "Searching for any generated files..."
+        echo "Listing contents of subject directory:"
+        ls -la "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/" 2>/dev/null || echo "  (cannot list directory)"
+        echo ""
+        echo "Searching for any generated .func.gii files in step1_output:"
         find "$OUTPUT_DIR_STEP1_ABS" -name "*.func.gii" -type f 2>/dev/null | head -20
     fi
     
@@ -404,13 +478,22 @@ for HEMISPHERE in lh rh; do
     echo "  Full command: $STEP3_CMD"
     echo ""
     
-    singularity exec -e \
+    echo "Running Step 3 (fsaverage to native conversion)..."
+    STEP3_OUTPUT=$(singularity exec -e \
         "$SINGULARITY_IMAGE" \
-        bash -c "$STEP3_CMD" 2>&1
+        bash -c "$STEP3_CMD" 2>&1)
     
     STEP3_EXIT=$?
+    
+    # Display Step 3 output (last 50 lines to avoid overwhelming output)
+    echo "--- Step 3 Output (last 50 lines) ---"
+    echo "$STEP3_OUTPUT" | tail -50
+    echo "--- End of Step 3 Output ---"
+    
     if [ $STEP3_EXIT -ne 0 ]; then
         echo "ERROR: Fsaverage to native conversion failed with exit code $STEP3_EXIT"
+        echo "Full Step 3 output:"
+        echo "$STEP3_OUTPUT"
         exit 1
     fi
     
@@ -419,9 +502,18 @@ for HEMISPHERE in lh rh; do
     # Debug: Check what files were created after Step 3
     echo ""
     echo "Checking generated files after native space conversion..."
+    echo "Expected output directory: $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy"
+    
     if [ -d "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy" ]; then
-        echo "Files in $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy:"
+        echo "Found deepRetinotopy directory. Listing files:"
         ls -lah "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy/" 2>/dev/null || echo "  (directory exists but listing failed)"
+        echo ""
+        echo "Searching for native space prediction files:"
+        find "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy" -name "*native*.func.gii" -type f 2>/dev/null | head -20
+    else
+        echo "WARNING: Directory $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy does not exist"
+        echo "Listing contents of subject directory:"
+        ls -la "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/" 2>/dev/null || echo "  (cannot list directory)"
     fi
     
     # Find and copy output files to new directories with renamed files
