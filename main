@@ -436,9 +436,13 @@ for HEMISPHERE in lh rh; do
     echo ""
     
     echo "Running Step 2 (inference)..."
-    STEP2_OUTPUT=$(cd "$PROJECT_ROOT_ABS" && singularity exec -e \
+    echo "--- Step 2 Output (real-time) ---"
+    
+    # Use Python -u flag for unbuffered output so logs appear in real-time
+    # Output is displayed directly without buffering
+    cd "$PROJECT_ROOT_ABS" && singularity exec -e \
         "$SINGULARITY_IMAGE" \
-        python "$PROJECT_ROOT_ABS/Models/run_inference_freesurfer.py" \
+        python -u "$PROJECT_ROOT_ABS/Models/run_inference_freesurfer.py" \
         --freesurfer_dir "$OUTPUT_DIR_STEP1_ABS" \
         --checkpoint_path "$CHECKPOINT_PATH_ABS" \
         --model_type "$MODEL_TYPE" \
@@ -446,19 +450,14 @@ for HEMISPHERE in lh rh; do
         --hemisphere "$HEMISPHERE_LONG" \
         --myelination "$MYELINATION" \
         --subject_id "$SUBJECT_ID" \
-        --output_dir "$OUTPUT_DIR_STEP1_ABS" 2>&1)
+        --output_dir "$OUTPUT_DIR_STEP1_ABS" 2>&1
     
     STEP2_EXIT=$?
     
-    # Display Step 2 output (last 50 lines to avoid overwhelming output)
-    echo "--- Step 2 Output (last 50 lines) ---"
-    echo "$STEP2_OUTPUT" | tail -50
     echo "--- End of Step 2 Output ---"
     
     if [ $STEP2_EXIT -ne 0 ]; then
         echo "ERROR: Inference failed with exit code $STEP2_EXIT"
-        echo "Full Step 2 output:"
-        echo "$STEP2_OUTPUT"
         exit 1
     fi
     
