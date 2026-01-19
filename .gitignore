@@ -166,7 +166,7 @@ eccentricity_*_noMyelin/
 
 # Large data files
 *.mat
-Retinotopy/data/raw/converted/
+!Retinotopy/data/raw/converted/*.mat
 Retinotopy/data/raw/surfaces/
 
 # Large notebooks (with outputs)
