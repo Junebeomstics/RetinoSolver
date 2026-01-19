@@ -320,21 +320,114 @@ for HEMISPHERE in lh rh; do
                 if [ ! -f "$ZIP_MARKER" ]; then
                     echo "Found checkpoint zip file ID. Downloading and extracting all checkpoints..."
                     ZIP_PATH="$PROJECT_ROOT/checkpoints.zip"
-                    DOWNLOAD_URL="https://drive.google.com/uc?export=download&id=${GDRIVE_ZIP_ID}"
                     
-                    # Download zip file
-                    if command -v wget >/dev/null 2>&1; then
-                        wget --quiet --show-progress -O "$ZIP_PATH" "$DOWNLOAD_URL" || {
-                            echo "ERROR: Failed to download checkpoint zip from Google Drive"
+                    # Try to use gdown first (handles Google Drive download better)
+                    if command -v gdown >/dev/null 2>&1 || pip show gdown >/dev/null 2>&1; then
+                        if ! command -v gdown >/dev/null 2>&1; then
+                            echo "Installing gdown for Google Drive download..."
+                            pip install gdown >/dev/null 2>&1 || echo "Warning: Failed to install gdown"
+                        fi
+                        
+                        if command -v gdown >/dev/null 2>&1; then
+                            echo "Downloading using gdown (recommended for Google Drive)..."
+                            gdown "$GDRIVE_ZIP_ID" -O "$ZIP_PATH" || {
+                                echo "ERROR: Failed to download checkpoint zip from Google Drive using gdown"
+                                exit 1
+                            }
+                        fi
+                    fi
+                    
+                    # Fallback: use wget/curl with proper Google Drive download handling
+                    if [ ! -f "$ZIP_PATH" ] || [ ! -s "$ZIP_PATH" ]; then
+                        echo "Using wget/curl for Google Drive download..."
+                        
+                        # Google Drive requires handling virus scan warning for large files
+                        # First request gets confirmation token, second request downloads file
+                        DOWNLOAD_URL="https://drive.google.com/uc?export=download&id=${GDRIVE_ZIP_ID}"
+                        
+                        # Google Drive large file download requires confirmation token
+                        # Download initial page to get confirmation token
+                        if command -v wget >/dev/null 2>&1; then
+                            TEMP_HTML="/tmp/gdrive_dl_page.html"
+                            wget --quiet --save-cookies /tmp/cookies.txt --keep-session-cookies --no-check-certificate \
+                                "https://drive.google.com/uc?export=download&id=${GDRIVE_ZIP_ID}" -O "$TEMP_HTML" || {
+                                echo "ERROR: Failed to get download page from Google Drive"
+                                rm -f /tmp/cookies.txt "$TEMP_HTML"
+                                exit 1
+                            }
+                            
+                            # Extract confirmation token from HTML
+                            CONFIRM=$(grep -o 'confirm=[^&"'\'' ]*' "$TEMP_HTML" | cut -d'=' -f2 | head -1)
+                            
+                            if [ -z "$CONFIRM" ]; then
+                                # Try alternative pattern (sometimes token is in different format)
+                                CONFIRM=$(grep -oP 'confirm=[a-zA-Z0-9_-]+' "$TEMP_HTML" | head -1 | cut -d'=' -f2)
+                            fi
+                            
+                            rm -f "$TEMP_HTML"
+                            
+                            # Construct final download URL with confirmation token
+                            if [ -n "$CONFIRM" ]; then
+                                DOWNLOAD_URL="https://drive.google.com/uc?export=download&confirm=${CONFIRM}&id=${GDRIVE_ZIP_ID}"
+                            else
+                                # If no confirmation token, file might be small enough to download directly
+                                DOWNLOAD_URL="https://drive.google.com/uc?export=download&id=${GDRIVE_ZIP_ID}"
+                            fi
+                            
+                            # Download zip file with cookies
+                            wget --quiet --load-cookies /tmp/cookies.txt --show-progress -O "$ZIP_PATH" "$DOWNLOAD_URL" || {
+                                echo "ERROR: Failed to download checkpoint zip from Google Drive"
+                                rm -f /tmp/cookies.txt
+                                exit 1
+                            }
+                            rm -f /tmp/cookies.txt
+                        elif command -v curl >/dev/null 2>&1; then
+                            # For curl, handle cookies manually
+                            TEMP_HTML="/tmp/gdrive_dl_page.html"
+                            curl -c /tmp/cookies.txt -s -L \
+                                "https://drive.google.com/uc?export=download&id=${GDRIVE_ZIP_ID}" > "$TEMP_HTML"
+                            
+                            # Extract confirmation token from HTML
+                            CONFIRM=$(grep -o 'confirm=[^&"'\'' ]*' "$TEMP_HTML" | cut -d'=' -f2 | head -1)
+                            
+                            if [ -z "$CONFIRM" ]; then
+                                # Try alternative pattern
+                                CONFIRM=$(grep -oP 'confirm=[a-zA-Z0-9_-]+' "$TEMP_HTML" | head -1 | cut -d'=' -f2)
+                            fi
+                            
+                            # Construct final download URL with confirmation token
+                            if [ -n "$CONFIRM" ]; then
+                                DOWNLOAD_URL="https://drive.google.com/uc?export=download&confirm=${CONFIRM}&id=${GDRIVE_ZIP_ID}"
+                            else
+                                DOWNLOAD_URL="https://drive.google.com/uc?export=download&id=${GDRIVE_ZIP_ID}"
+                            fi
+                            
+                            curl -L --progress-bar -b /tmp/cookies.txt -c /tmp/cookies.txt -o "$ZIP_PATH" "$DOWNLOAD_URL" || {
+                                echo "ERROR: Failed to download checkpoint zip from Google Drive"
+                                rm -f /tmp/cookies.txt "$TEMP_HTML"
+                                exit 1
+                            }
+                            rm -f /tmp/cookies.txt "$TEMP_HTML"
+                        else
+                            echo "ERROR: Neither gdown, wget, nor curl is available for downloading checkpoint zip"
                             exit 1
-                        }
-                    elif command -v curl >/dev/null 2>&1; then
-                        curl -L --progress-bar -o "$ZIP_PATH" "$DOWNLOAD_URL" || {
-                            echo "ERROR: Failed to download checkpoint zip from Google Drive"
-                            exit 1
-                        }
-                    else
-                        echo "ERROR: Neither wget nor curl is available for downloading checkpoint zip"
+                        fi
+                    fi
+                    
+                    # Verify downloaded file is a valid ZIP file
+                    if [ ! -f "$ZIP_PATH" ] || [ ! -s "$ZIP_PATH" ]; then
+                        echo "ERROR: Downloaded file is empty or does not exist"
+                        exit 1
+                    fi
+                    
+                    # Check if file is actually a ZIP file (check magic bytes)
+                    FILE_HEADER=$(head -c 4 "$ZIP_PATH" | od -An -tx1 | tr -d ' \n')
+                    if [ "$FILE_HEADER" != "504b0304" ] && [ "$FILE_HEADER" != "504b0506" ] && [ "$FILE_HEADER" != "504b0708" ]; then
+                        echo "ERROR: Downloaded file is not a valid ZIP file (header: $FILE_HEADER)"
+                        echo "This usually means Google Drive returned a virus scan warning page."
+                        echo "File size: $(stat -f%z "$ZIP_PATH" 2>/dev/null || stat -c%s "$ZIP_PATH" 2>/dev/null || echo "unknown") bytes"
+                        echo "First 200 bytes of file:"
+                        head -c 200 "$ZIP_PATH" | strings | head -5
                         exit 1
                     fi
                     
