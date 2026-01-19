@@ -140,7 +140,41 @@ def main():
     model = create_model(args.model_type, num_features=num_features, args=args).to(device)
     
     print(f"Loading checkpoint from: {args.checkpoint_path}")
-    checkpoint = torch.load(args.checkpoint_path, map_location=device)
+    
+    # Validate checkpoint file before loading
+    if not os.path.exists(args.checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint file not found: {args.checkpoint_path}")
+    
+    # Check file size (PyTorch checkpoints are typically > 1KB)
+    file_size = os.path.getsize(args.checkpoint_path)
+    if file_size < 1024:
+        raise ValueError(f"Checkpoint file seems too small ({file_size} bytes). "
+                        f"Expected PyTorch checkpoint file (.pt).")
+    
+    # Check if file is actually a PyTorch checkpoint by reading first few bytes
+    # PyTorch checkpoints start with specific magic bytes
+    try:
+        with open(args.checkpoint_path, 'rb') as f:
+            first_bytes = f.read(4)
+            # PyTorch pickle files typically start with specific protocol markers
+            # If it starts with 'v' (ASCII), it might be a text file or wrong format
+            if first_bytes.startswith(b'v') or first_bytes.startswith(b'PK'):
+                # 'PK' could be a ZIP file (which PyTorch uses), but 'v' suggests text
+                if first_bytes.startswith(b'v'):
+                    raise ValueError(f"Checkpoint file appears to be a text file, not a PyTorch checkpoint. "
+                                   f"First bytes: {first_bytes[:20]}")
+    except Exception as e:
+        if isinstance(e, ValueError):
+            raise
+        print(f"Warning: Could not validate checkpoint file format: {e}")
+    
+    try:
+        checkpoint = torch.load(args.checkpoint_path, map_location=device, weights_only=False)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load checkpoint from {args.checkpoint_path}. "
+                          f"Error: {e}. "
+                          f"File size: {file_size} bytes. "
+                          f"Please verify the file is a valid PyTorch checkpoint (.pt file).")
     
     # Handle different checkpoint formats
     if isinstance(checkpoint, dict):

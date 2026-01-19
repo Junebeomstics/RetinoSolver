@@ -8,6 +8,46 @@ set -e  # Exit on error (remove -x to avoid verbose command logging)
 # Based on run_deepRetinotopy_freesurfer_with_docker.sh
 # Uses Singularity instead of Docker for brainlife compatibility
 
+# Check and pull Git LFS files if needed
+# Git LFS files are stored as pointer files and need to be explicitly pulled
+echo "Checking for Git LFS files..."
+if command -v git-lfs >/dev/null 2>&1 || command -v git >/dev/null 2>&1; then
+    # Check if we're in a git repository
+    if [ -d ".git" ]; then
+        # Check if git-lfs is available
+        if git lfs version >/dev/null 2>&1; then
+            echo "Git LFS detected. Pulling LFS files..."
+            git lfs pull || {
+                echo "Warning: Failed to pull Git LFS files. Checkpoint files may be pointer files only."
+                echo "Attempting to fetch LFS files..."
+                git lfs fetch --all || echo "Warning: Git LFS fetch also failed."
+            }
+        else
+            echo "Warning: Git LFS is not installed. Checkpoint files may be pointer files only."
+            echo "If checkpoint files are very small (< 1KB), they are likely Git LFS pointer files."
+        fi
+    fi
+    
+    # Verify checkpoint files are actual files, not pointer files
+    # Check if any .pt files in checkpoints directory are suspiciously small
+    if [ -d "Models/checkpoints" ]; then
+        echo "Verifying checkpoint files..."
+        find Models/checkpoints -name "*.pt" -type f 2>/dev/null | while read -r pt_file; do
+            if [ -f "$pt_file" ]; then
+                # Get file size (works on both Linux and macOS)
+                file_size=$(stat -f%z "$pt_file" 2>/dev/null || stat -c%s "$pt_file" 2>/dev/null || echo "0")
+                # Git LFS pointer files are typically < 200 bytes
+                if [ "$file_size" -lt 1024 ]; then
+                    echo "WARNING: $pt_file appears to be a Git LFS pointer file (size: $file_size bytes)"
+                    echo "  Expected PyTorch checkpoint file (typically > 1MB)"
+                    echo "  This file needs to be pulled with 'git lfs pull'"
+                    echo "  If Git LFS is not available, checkpoint files cannot be used."
+                fi
+            fi
+        done
+    fi
+fi
+
 # Check if jq is available
 if ! command -v jq >/dev/null 2>&1; then
     echo "ERROR: jq command is required but not found. Please install jq."
@@ -434,16 +474,18 @@ for HEMISPHERE in lh rh; do
     # Create a temporary wrapper script to install einops and run Python
     # This avoids bash -c issues with redirection in brainlife.io's wrapper
     TEMP_WRAPPER="$PROJECT_ROOT_ABS/run_step2_wrapper.sh"
-    cat > "$TEMP_WRAPPER" << WRAPPER_EOF
+    cat > "$TEMP_WRAPPER" << 'WRAPPER_EOF'
 #!/bin/bash
 set -e
 # Install einops if not available (check first to avoid unnecessary install)
 if ! python -c "import einops" 2>/dev/null; then
     echo "Installing einops..."
-    pip install --quiet --no-cache-dir einops
+    pip install --quiet --no-cache-dir einops || {
+        echo "Warning: Failed to install einops, but continuing..."
+    }
 fi
-# Run inference script with all arguments
-exec python -u "\$@"
+# Run inference script with all arguments passed to this script
+exec python -u "$@"
 WRAPPER_EOF
     chmod +x "$TEMP_WRAPPER"
     
@@ -465,8 +507,6 @@ WRAPPER_EOF
     
     # Clean up wrapper script
     rm -f "$TEMP_WRAPPER"
-    
-    STEP2_EXIT=$?
     
     echo "--- End of Step 2 Output ---"
     
