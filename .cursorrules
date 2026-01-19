@@ -1,0 +1,436 @@
+# RetinoSolver Project Rules
+
+## Project Overview
+
+RetinoSolver is a deep learning project for predicting retinotopic organization of human visual cortex from anatomy using geometric deep learning. The project extends the original deepRetinotopy repository with multiple model architectures including Transolver variants.
+
+## Project Structure
+
+### Directory Organization
+
+```
+RetinoSolver/
+├── Models/                    # Model training and architecture code
+│   ├── models/               # Model class definitions
+│   │   ├── baseline.py      # Baseline SplineConv model
+│   │   ├── transolver_optionA.py  # Hybrid SplineConv + Physics Attention (no edge info)
+│   │   ├── transolver_optionB.py  # Hybrid SplineConv + Physics Attention (with edge info)
+│   │   ├── transolver_optionC.py  # Full Transolver with Physics Attention
+│   │   ├── physics_attention.py   # Physics Attention modules
+│   │   └── utils.py         # Model utilities
+│   ├── train_unified.py     # Unified training script (PRIMARY)
+│   ├── run_all_experiments.sh  # Batch experiment runner
+│   └── [legacy scripts]     # Original paper scripts (for reference only)
+├── Manuscript/               # Figure generation and statistics
+│   ├── plots/               # Visualization scripts
+│   └── stats/               # Statistical analysis scripts
+├── run_from_freesurfer/     # FreeSurfer inference pipeline
+├── Retinotopy/              # Dataset generation and processing
+│   └── data/                # Data files (not in repo, download from Google Drive)
+├── utils/                   # Utility scripts
+└── main                     # Brainlife.io app entry point
+```
+
+### Key Files
+
+- **Primary Training Script**: `Models/train_unified.py` - Use this for all new training
+- **Model Definitions**: `Models/models/*.py` - All model architectures
+- **Inference Pipeline**: `run_from_freesurfer/run_inference_freesurfer.py`
+- **Brainlife App**: `main` - Singularity-based app entry point
+
+## Code Style and Conventions
+
+### General Principles
+
+1. **Language**: All code, comments, and print statements must be in English
+2. **Variable Naming**: Use clear, self-explanatory variable names
+3. **Error Handling**: Preemptively handle potential error-prone sections
+4. **Code Quality**: Write expert-level code that is clear and readable, avoiding unnecessary complexity
+
+### Python Code Style
+
+- Follow PEP 8 conventions
+- Use type hints where appropriate (especially for function signatures)
+- Document classes and functions with docstrings
+- Use descriptive variable names:
+  - `model_type` not `mt`
+  - `prediction_target` not `pred`
+  - `hemisphere` not `hemi` (unless in context where abbreviation is clear)
+
+### Model Architecture Patterns
+
+#### Model Class Structure
+
+All model classes should:
+- Inherit from `torch.nn.Module`
+- Accept `num_features` as first parameter in `__init__`
+- Implement `forward(self, data)` method that accepts PyTorch Geometric data objects
+- Use consistent naming: `deepRetinotopy_<VariantName>`
+
+Example:
+```python
+class deepRetinotopy_Baseline(torch.nn.Module):
+    """Baseline model: SplineConv only"""
+    def __init__(self, num_features):
+        super(deepRetinotopy_Baseline, self).__init__()
+        # ... layers ...
+    
+    def forward(self, data):
+        x, edge_index, pseudo = data.x, data.edge_index, data.edge_attr
+        # ... forward pass ...
+        return x
+```
+
+#### Model Types
+
+1. **baseline**: Original SplineConv-based model (12 layers)
+2. **transolver_optionA**: Hybrid SplineConv + Physics Attention (without edge information)
+3. **transolver_optionB**: Hybrid SplineConv + Physics Attention (with encoded edge information)
+4. **transolver_optionC**: Full Transolver with Physics Attention architecture
+
+#### Model Factory Pattern
+
+Use the `create_model()` function pattern in `train_unified.py`:
+- Centralized model creation
+- Consistent parameter handling
+- Easy to extend with new model types
+
+### Data Handling
+
+#### Data Paths
+
+- **Training Data**: `Retinotopy/data/processed/` (`.pt` files)
+- **Raw Data**: `Retinotopy/data/raw/converted/` (`.mat` files)
+- **Surface Files**: `Retinotopy/data/raw/surfaces/` (`.surf.gii` files)
+
+#### Data Processing
+
+- Use `process_raw.py` for converting raw data to processed format
+- Processed files are automatically detected by training scripts
+- Data processing is skipped if processed files already exist
+
+#### Data Format
+
+- Input: PyTorch Geometric `Data` objects with:
+  - `x`: Node features (shape: [num_nodes, num_features])
+  - `edge_index`: Graph connectivity (shape: [2, num_edges])
+  - `edge_attr`: Edge attributes (pseudo-coordinates, shape: [num_edges, 3])
+  - `y`: Target values (shape: [num_nodes])
+
+### Training Conventions
+
+#### Training Script Usage
+
+**Always use `train_unified.py` for new training** - Legacy scripts are for reference only.
+
+#### Required Arguments
+
+- `--model_type`: One of `['baseline', 'transolver_optionA', 'transolver_optionB', 'transolver_optionC']`
+- `--prediction`: One of `['eccentricity', 'polarAngle', 'pRFsize']`
+- `--hemisphere`: One of `['Left', 'Right']`
+
+#### Hyperparameter Defaults
+
+**Standard Models** (baseline, optionA, optionB):
+- `n_epochs`: 200
+- `lr_init`: 0.01
+- `lr_decay_epoch`: 100
+- `lr_decay`: 0.005
+- `scheduler`: 'cosine'
+- `optimizer`: 'AdamW'
+- `weight_decay`: 1e-5
+- `max_grad_norm`: 0.1
+
+**Transolver Option C**:
+- `n_epochs`: 500
+- `lr_init`: 0.001
+- `lr_decay_epoch`: 250
+- `lr_decay`: 0.0001
+- `n_layers`: 8
+- `n_hidden`: 128
+- `n_heads`: 8
+- `slice_num`: 64
+- `dropout`: 0.0
+
+#### Output Directory Structure
+
+Results are saved in: `Models/output_wandb/` (or `--output_dir` if specified)
+
+**Without Wandb**:
+```
+{output_dir}/{prediction}_{hemisphere}_{model_type}/
+├── {pred_short}_{hemisphere}_{model_type}_best_model_epoch{epoch}.pt
+├── {pred_short}_{hemisphere}_{model_type}_best_test_results.pt
+├── {pred_short}_{hemisphere}_{model_type}_final_model.pt
+└── {pred_short}_{hemisphere}_{model_type}_final_test_results.pt
+```
+
+**With Wandb**:
+```
+{output_dir}/{wandb_run_name}/
+├── {pred_short}_{hemisphere}_{model_type}_best_model_epoch{epoch}.pt
+├── {pred_short}_{hemisphere}_{model_type}_best_test_results.pt
+├── {pred_short}_{hemisphere}_{model_type}_final_model.pt
+└── {pred_short}_{hemisphere}_{model_type}_final_test_results.pt
+```
+
+**Naming Conventions**:
+- `pred_short`: `ecc` (eccentricity), `PA` (polarAngle), `size` (pRFsize)
+- `hemisphere`: `Left` or `Right`
+- `model_type`: `baseline`, `transolver_optionA`, `transolver_optionB`, `transolver_optionC`
+- Myelination suffix: `_noMyelin` if myelination is disabled
+
+### Inference Conventions
+
+#### FreeSurfer Inference Pipeline
+
+The inference pipeline consists of three steps:
+
+1. **Native to fsaverage conversion**: `run_from_freesurfer/1_native2fsaverage.sh`
+2. **Inference**: `run_from_freesurfer/run_inference_freesurfer.py`
+3. **Fsaverage to native conversion**: `run_from_freesurfer/2_fsaverage2native.sh`
+
+#### Checkpoint Loading
+
+- Checkpoints are searched in: `Models/checkpoints/{prediction}_{hemisphere}_{model_type}[_noMyelin]/`
+- Pattern: `{pred_short}_{hemisphere}_{model_type}[_noMyelin]_best_model_epoch*.pt`
+- Use the latest epoch checkpoint if multiple exist
+
+#### Output Files
+
+- **Fsaverage space**: `{subject_id}.predicted_{prediction}_{hemisphere}[_myelin][_{model_type}].func.gii`
+- **Native space**: `{subject_id}.predicted_{prediction}_{model_name}.{hemisphere}.native.func.gii`
+
+### Docker/Containerization
+
+#### Docker Image
+
+- **Image**: `vnmd/deepretinotopy_1.0.18:latest`
+- Always use this image for consistency
+- Pull image before running: `docker pull vnmd/deepretinotopy_1.0.18:latest`
+
+#### Docker Usage Pattern
+
+```bash
+docker run --rm --gpus all \
+  -v $(pwd):/workspace \
+  -v $(pwd)/Retinotopy/data:/workspace/Retinotopy/data \
+  -w /workspace \
+  vnmd/deepretinotopy_1.0.18:latest \
+  python script.py --args
+```
+
+#### Singularity (Brainlife.io)
+
+**CRITICAL**: When using Singularity for brainlife.io apps:
+- **DO NOT** use `bash -c` wrapper
+- Execute scripts directly: `singularity exec -e docker://IMAGE ./script.sh args...`
+- Example: `singularity exec -e docker://IMAGE python script.py --arg1 value1`
+
+**INCORRECT**:
+```bash
+singularity exec -e docker://IMAGE bash -c "./script.sh arg1 arg2"
+```
+
+**CORRECT**:
+```bash
+singularity exec -e docker://IMAGE ./script.sh arg1 arg2
+singularity exec -e docker://IMAGE python script.py --arg1 value1
+```
+
+### File Naming Conventions
+
+#### Scripts
+
+- Training scripts: `train_*.py` or `*_training.py`
+- Inference scripts: `run_inference_*.py` or `*_inference.py`
+- Evaluation scripts: `evaluate_*.py` or `*_eval.py`
+- Plotting scripts: `plot_*.py` or `*_plot.py`
+- Statistical scripts: `*_stats.py` or `stats_*.py`
+
+#### Model Files
+
+- Model classes: `{model_name}.py` (e.g., `baseline.py`, `transolver_optionA.py`)
+- Model instances: `{pred_short}_{hemisphere}_{model_type}_[best|final]_model.pt`
+
+#### Data Files
+
+- Processed data: `{prediction}_{hemisphere}_*.pt`
+- Raw data: `*.mat` (MATLAB format)
+- Surface files: `*.surf.gii`, `*.func.gii` (GIFTI format)
+
+### Visualization Conventions
+
+#### Matplotlib Style
+
+When creating plots, follow these conventions:
+
+1. **Axes**: Make right and top spines transparent/hidden
+2. **Grid**: Set grid to off
+3. **Legend**: Position so it doesn't obscure the main plot
+4. **Spines**: Do not extend axis lines beyond tick marks
+5. **Font Sizes**: Ensure xlabel, ylabel, title, xtick, ytick are appropriately large for visibility
+6. **Colors**: Use distinct colors considering color blindness if colors are not preset
+
+Example:
+```python
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots(figsize=(8, 6))
+ax.spines['right'].set_visible(False)
+ax.spines['top'].set_visible(False)
+ax.grid(False)
+ax.set_xlabel('X Label', fontsize=12)
+ax.set_ylabel('Y Label', fontsize=12)
+ax.set_title('Title', fontsize=14)
+plt.legend(loc='best', frameon=False)
+plt.tight_layout()
+```
+
+### Experiment Tracking
+
+#### Wandb Integration
+
+- Use `--use_wandb` flag to enable Wandb logging
+- Project name: `retinotopic_mapping` (default)
+- Log metrics: loss, MAE, R2, validation metrics
+- Log hyperparameters: all training arguments
+- Log model checkpoints: best and final models
+
+#### Experiment Organization
+
+- Group experiments by model type, prediction target, and hemisphere
+- Use descriptive run names: `{model_type}_{prediction}_{hemisphere}`
+- Tag experiments appropriately for filtering
+
+### Error Handling
+
+#### Common Error Scenarios
+
+1. **Missing Data**: Check if data files exist before processing
+2. **Checkpoint Not Found**: Provide clear error message with search pattern
+3. **Docker Image Missing**: Check and pull image before execution
+4. **GPU Not Available**: Fall back to CPU with warning message
+5. **Memory Issues**: Use batch_size=1 for large models
+
+#### Error Messages
+
+- Use clear, actionable error messages
+- Include relevant paths and parameters in error output
+- Provide suggestions for resolution when possible
+
+### Testing and Evaluation
+
+#### Evaluation Metrics
+
+- **MAE**: Mean Absolute Error (primary metric)
+- **R2**: Coefficient of determination
+- **MAE_thr**: MAE with threshold (used for best model selection)
+
+#### Test Set Evaluation
+
+- Always evaluate on held-out test set
+- Save predictions and ground truth for analysis
+- Generate both `.pt` (PyTorch) and `.npz` (NumPy) output formats
+
+### Git and Version Control
+
+#### File Exclusions
+
+- Large data files: `Retinotopy/data/` (use Git LFS or external storage)
+- Model checkpoints: `Models/output_wandb/`, `Models/checkpoints/` (use Git LFS)
+- Docker images: Excluded by default
+- Temporary files: `*.pyc`, `__pycache__/`, `.DS_Store`
+
+#### Commit Messages
+
+- Use clear, descriptive commit messages
+- Reference issue numbers if applicable
+- Group related changes in single commits
+
+### Documentation
+
+#### Code Documentation
+
+- Document all public functions and classes
+- Include parameter descriptions and return values
+- Add usage examples for complex functions
+
+#### README Files
+
+- Keep README files up to date
+- Include installation instructions
+- Document usage examples
+- Link to relevant papers and citations
+
+### Dependencies
+
+#### Core Dependencies
+
+- PyTorch >= 2.1.0
+- PyTorch Geometric >= 2.4.0
+- NumPy >= 1.24.0, < 2.0.0
+- SciPy >= 1.10.0
+- nibabel >= 5.0.0 (neuroimaging)
+- matplotlib >= 3.7.0 (visualization)
+
+#### Optional Dependencies
+
+- wandb (experiment tracking)
+- tensorboard (alternative tracking)
+
+See `requirements.txt` for complete list.
+
+### Best Practices
+
+1. **Always use unified training script** (`train_unified.py`) for new experiments
+2. **Test locally** before running batch experiments
+3. **Use Docker** for consistency across environments
+4. **Save checkpoints regularly** (best and final models)
+5. **Log experiments** with Wandb for tracking
+6. **Validate data paths** before processing
+7. **Handle errors gracefully** with informative messages
+8. **Follow naming conventions** for consistency
+9. **Document changes** in commit messages and code comments
+10. **Keep legacy code** for reference but don't modify it
+
+### Common Workflows
+
+#### Training a New Model
+
+```bash
+cd Models
+python train_unified.py \
+    --model_type transolver_optionC \
+    --prediction eccentricity \
+    --hemisphere Left \
+    --n_epochs 500 \
+    --use_wandb
+```
+
+#### Running Inference
+
+```bash
+cd run_from_freesurfer
+./run_deepRetinotopy_freesurfer_with_docker.sh \
+    --freesurfer_dir /path/to/freesurfer \
+    --subject_id SUBJECT_ID \
+    --hemisphere lh \
+    --model_type baseline \
+    --prediction eccentricity \
+    --checkpoint /path/to/checkpoint.pt
+```
+
+#### Batch Experiments
+
+```bash
+cd Models
+./run_all_experiments.sh
+```
+
+### Notes on Legacy Code
+
+- Files in `Models/` with names like `deepRetinotopy_*.py` and `ModelGeneralizability_*.py` are from the original paper
+- These are kept for reference and reproducibility
+- **Do not modify** legacy scripts - use `train_unified.py` instead
+- Legacy scripts may have different conventions - refer to them only for understanding original implementation
