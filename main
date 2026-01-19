@@ -327,15 +327,12 @@ for HEMISPHERE in lh rh; do
                     echo "Installing/checking gdown in container for Google Drive download..."
                     
                     # Check if gdown is available in container, install if not
-                    GDOWN_CHECK_CMD="python -c 'import gdown' 2>/dev/null || echo 'not_installed'"
-                    GDOWN_STATUS=$(singularity exec -e "$SINGULARITY_IMAGE" bash -c "$GDOWN_CHECK_CMD" 2>/dev/null || echo "not_installed")
-                    
-                    if [ "$GDOWN_STATUS" != "not_installed" ]; then
-                        echo "✓ gdown is already available in container"
-                    else
+                    # Use direct python execution instead of bash -c
+                    if ! singularity exec -e "$SINGULARITY_IMAGE" \
+                        python -c "import gdown" >/dev/null 2>&1; then
                         echo "Installing gdown in container..."
                         INSTALL_OUTPUT=$(singularity exec -e "$SINGULARITY_IMAGE" \
-                            bash -c "pip install --quiet --no-cache-dir gdown" 2>&1)
+                            pip install --quiet --no-cache-dir gdown 2>&1)
                         INSTALL_EXIT=$?
                         
                         if [ $INSTALL_EXIT -ne 0 ]; then
@@ -347,28 +344,42 @@ for HEMISPHERE in lh rh; do
                             exit 1
                         fi
                         echo "✓ gdown installed successfully in container"
+                    else
+                        echo "✓ gdown is already available in container"
                     fi
                     
                     echo "Downloading checkpoint zip from Google Drive using gdown..."
-                    DOWNLOAD_OUTPUT=$(singularity exec -e "$SINGULARITY_IMAGE" \
-                        bash -c "gdown \"$GDRIVE_ZIP_ID\" -O \"$ZIP_PATH\"" 2>&1)
-                    DOWNLOAD_EXIT=$?
+                    echo "Google Drive file ID: $GDRIVE_ZIP_ID"
+                    echo "Target path: $ZIP_PATH"
                     
-                    if [ $DOWNLOAD_EXIT -ne 0 ]; then
+                    # Run gdown directly (no bash -c) - use python -m gdown
+                    # Use unbuffered output for real-time progress
+                    singularity exec -e "$SINGULARITY_IMAGE" \
+                        python -u -m gdown "$GDRIVE_ZIP_ID" -O "$ZIP_PATH" || {
                         echo "ERROR: Failed to download checkpoint zip from Google Drive using gdown"
-                        echo "Download output: $DOWNLOAD_OUTPUT"
                         echo "Please verify:"
                         echo "  1. Google Drive file ID is correct: $GDRIVE_ZIP_ID"
                         echo "  2. File is shared with 'Anyone with the link'"
                         echo "  3. Network access is available"
                         exit 1
-                    fi
+                    }
+                    
+                    # Wait a moment for file system sync
+                    sleep 1
                     
                     # Verify file was downloaded successfully
-                    if [ ! -f "$ZIP_PATH" ] || [ ! -s "$ZIP_PATH" ]; then
-                        echo "ERROR: Downloaded file is empty or does not exist after gdown"
+                    if [ ! -f "$ZIP_PATH" ]; then
+                        echo "ERROR: Downloaded file does not exist at: $ZIP_PATH"
                         exit 1
                     fi
+                    
+                    FILE_SIZE=$(stat -f%z "$ZIP_PATH" 2>/dev/null || stat -c%s "$ZIP_PATH" 2>/dev/null || echo "0")
+                    if [ "$FILE_SIZE" -eq 0 ]; then
+                        echo "ERROR: Downloaded file is empty (size: 0 bytes)"
+                        exit 1
+                    fi
+                    
+                    echo "✓ Download completed successfully (size: $FILE_SIZE bytes)"
                     
                     # Check if file is actually a ZIP file (check magic bytes)
                     FILE_HEADER=$(head -c 4 "$ZIP_PATH" | od -An -tx1 | tr -d ' \n')
