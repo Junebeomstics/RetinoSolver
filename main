@@ -323,48 +323,50 @@ for HEMISPHERE in lh rh; do
                     
                     # Force use of gdown for Google Drive downloads (handles virus scan warnings properly)
                     # gdown is REQUIRED - wget/curl cannot reliably handle Google Drive virus scan warnings
-                    echo "Installing/checking gdown for Google Drive download..."
-                    if ! command -v gdown >/dev/null 2>&1; then
-                        # Try installing with pip (system-wide or user)
-                        echo "Installing gdown..."
-                        pip install --user gdown >/dev/null 2>&1 || pip install gdown >/dev/null 2>&1 || {
-                            echo "ERROR: Failed to install gdown. Google Drive download requires gdown."
-                            echo "Please ensure pip is available and network access is enabled."
-                            exit 1
-                        }
+                    # Install and use gdown inside the container (brainlife.io may not have pip on host)
+                    echo "Installing/checking gdown in container for Google Drive download..."
+                    
+                    # Check if gdown is available in container, install if not
+                    GDOWN_CHECK_CMD="python -c 'import gdown' 2>/dev/null || echo 'not_installed'"
+                    GDOWN_STATUS=$(singularity exec -e "$SINGULARITY_IMAGE" bash -c "$GDOWN_CHECK_CMD" 2>/dev/null || echo "not_installed")
+                    
+                    if [ "$GDOWN_STATUS" != "not_installed" ]; then
+                        echo "✓ gdown is already available in container"
+                    else
+                        echo "Installing gdown in container..."
+                        INSTALL_OUTPUT=$(singularity exec -e "$SINGULARITY_IMAGE" \
+                            bash -c "pip install --quiet --no-cache-dir gdown" 2>&1)
+                        INSTALL_EXIT=$?
                         
-                        # Add user bin to PATH if gdown was installed with --user
-                        if [ -d "$HOME/.local/bin" ] && ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
-                            export PATH="$HOME/.local/bin:$PATH"
+                        if [ $INSTALL_EXIT -ne 0 ]; then
+                            echo "ERROR: Failed to install gdown in container"
+                            echo "Install output: $INSTALL_OUTPUT"
+                            echo "Google Drive download requires gdown. Please ensure:"
+                            echo "  1. Container has pip available"
+                            echo "  2. Network access is enabled"
+                            exit 1
                         fi
+                        echo "✓ gdown installed successfully in container"
                     fi
                     
-                    # Verify gdown is now available
-                    if ! command -v gdown >/dev/null 2>&1; then
-                        echo "ERROR: gdown is not available after installation attempt"
-                        echo "Please ensure Python and pip are properly configured"
-                        exit 1
-                    fi
+                    echo "Downloading checkpoint zip from Google Drive using gdown..."
+                    DOWNLOAD_OUTPUT=$(singularity exec -e "$SINGULARITY_IMAGE" \
+                        bash -c "gdown \"$GDRIVE_ZIP_ID\" -O \"$ZIP_PATH\"" 2>&1)
+                    DOWNLOAD_EXIT=$?
                     
-                    echo "Downloading using gdown (required for Google Drive large files)..."
-                    gdown "$GDRIVE_ZIP_ID" -O "$ZIP_PATH" || {
+                    if [ $DOWNLOAD_EXIT -ne 0 ]; then
                         echo "ERROR: Failed to download checkpoint zip from Google Drive using gdown"
+                        echo "Download output: $DOWNLOAD_OUTPUT"
                         echo "Please verify:"
                         echo "  1. Google Drive file ID is correct: $GDRIVE_ZIP_ID"
                         echo "  2. File is shared with 'Anyone with the link'"
                         echo "  3. Network access is available"
                         exit 1
-                    }
+                    fi
                     
                     # Verify file was downloaded successfully
                     if [ ! -f "$ZIP_PATH" ] || [ ! -s "$ZIP_PATH" ]; then
                         echo "ERROR: Downloaded file is empty or does not exist after gdown"
-                        exit 1
-                    fi
-                    
-                    # Verify downloaded file is a valid ZIP file
-                    if [ ! -f "$ZIP_PATH" ] || [ ! -s "$ZIP_PATH" ]; then
-                        echo "ERROR: Downloaded file is empty or does not exist"
                         exit 1
                     fi
                     
