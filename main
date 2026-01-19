@@ -8,46 +8,6 @@ set -e  # Exit on error (remove -x to avoid verbose command logging)
 # Based on run_deepRetinotopy_freesurfer_with_docker.sh
 # Uses Singularity instead of Docker for brainlife compatibility
 
-# Check and pull Git LFS files if needed
-# Git LFS files are stored as pointer files and need to be explicitly pulled
-echo "Checking for Git LFS files..."
-if command -v git-lfs >/dev/null 2>&1 || command -v git >/dev/null 2>&1; then
-    # Check if we're in a git repository
-    if [ -d ".git" ]; then
-        # Check if git-lfs is available
-        if git lfs version >/dev/null 2>&1; then
-            echo "Git LFS detected. Pulling LFS files..."
-            git lfs pull || {
-                echo "Warning: Failed to pull Git LFS files. Checkpoint files may be pointer files only."
-                echo "Attempting to fetch LFS files..."
-                git lfs fetch --all || echo "Warning: Git LFS fetch also failed."
-            }
-        else
-            echo "Warning: Git LFS is not installed. Checkpoint files may be pointer files only."
-            echo "If checkpoint files are very small (< 1KB), they are likely Git LFS pointer files."
-        fi
-    fi
-    
-    # Verify checkpoint files are actual files, not pointer files
-    # Check if any .pt files in checkpoints directory are suspiciously small
-    if [ -d "Models/checkpoints" ]; then
-        echo "Verifying checkpoint files..."
-        find Models/checkpoints -name "*.pt" -type f 2>/dev/null | while read -r pt_file; do
-            if [ -f "$pt_file" ]; then
-                # Get file size (works on both Linux and macOS)
-                file_size=$(stat -f%z "$pt_file" 2>/dev/null || stat -c%s "$pt_file" 2>/dev/null || echo "0")
-                # Git LFS pointer files are typically < 200 bytes
-                if [ "$file_size" -lt 1024 ]; then
-                    echo "WARNING: $pt_file appears to be a Git LFS pointer file (size: $file_size bytes)"
-                    echo "  Expected PyTorch checkpoint file (typically > 1MB)"
-                    echo "  This file needs to be pulled with 'git lfs pull'"
-                    echo "  If Git LFS is not available, checkpoint files cannot be used."
-                fi
-            fi
-        done
-    fi
-fi
-
 # Check if jq is available
 if ! command -v jq >/dev/null 2>&1; then
     echo "ERROR: jq command is required but not found. Please install jq."
@@ -326,7 +286,207 @@ for HEMISPHERE in lh rh; do
         exit 1
     fi
     
+    # Check if checkpoint file is a Git LFS pointer file (very small file)
+    # If so, download from Google Drive
+    CHECKPOINT_PATH_ABS="$(resolve_abs_path "$CHECKPOINT_PATH")"
+    if [ -f "$CHECKPOINT_PATH_ABS" ]; then
+        file_size=$(stat -f%z "$CHECKPOINT_PATH_ABS" 2>/dev/null || stat -c%s "$CHECKPOINT_PATH_ABS" 2>/dev/null || echo "0")
+        # Git LFS pointer files are typically < 200 bytes, checkpoint files are typically > 1MB
+        if [ "$file_size" -lt 1024 ]; then
+            echo "WARNING: Checkpoint file appears to be a Git LFS pointer file (size: $file_size bytes)"
+            echo "Attempting to download from Google Drive..."
+            
+            # Google Drive checkpoint download configuration
+            # ============================================
+            # OPTION 1: Hardcode ZIP file ID here (recommended for folder-based sharing)
+            # Replace YOUR_ZIP_FILE_ID with your actual Google Drive ZIP file ID
+            GDRIVE_ZIP_ID="1eshzvbtYbGrdzj6WxYM8ws4CycFZQPOY"  # Example: "1a2b3c4d5e6f7g8h9i0j"
+            
+            # OPTION 2: Read from config.json (if not hardcoded above)
+            if [ -z "$GDRIVE_ZIP_ID" ]; then
+                GDRIVE_ZIP_ID=$(jq -r '.checkpoint_zip_id // empty' config.json 2>/dev/null)
+            fi
+            
+            # OPTION 3: Individual file mapping (fallback)
+            CHECKPOINT_BASENAME=$(basename "$CHECKPOINT_PATH")
+            GDRIVE_FILE_ID=$(jq -r ".checkpoint_files.\"$CHECKPOINT_BASENAME\" // empty" config.json 2>/dev/null)
+            GDRIVE_LINK=$(jq -r '.checkpoint_gdrive_link // empty' config.json 2>/dev/null)
+            
+            # If zip file ID is provided, download and extract entire checkpoints folder
+            # This is the recommended approach for folder-based sharing
+            if [ -n "$GDRIVE_ZIP_ID" ]; then
+                # Check if we've already downloaded and extracted the zip
+                ZIP_MARKER="$PROJECT_ROOT/.checkpoints_zip_extracted"
+                if [ ! -f "$ZIP_MARKER" ]; then
+                    echo "Found checkpoint zip file ID. Downloading and extracting all checkpoints..."
+                    ZIP_PATH="$PROJECT_ROOT/checkpoints.zip"
+                    DOWNLOAD_URL="https://drive.google.com/uc?export=download&id=${GDRIVE_ZIP_ID}"
+                    
+                    # Download zip file
+                    if command -v wget >/dev/null 2>&1; then
+                        wget --quiet --show-progress -O "$ZIP_PATH" "$DOWNLOAD_URL" || {
+                            echo "ERROR: Failed to download checkpoint zip from Google Drive"
+                            exit 1
+                        }
+                    elif command -v curl >/dev/null 2>&1; then
+                        curl -L --progress-bar -o "$ZIP_PATH" "$DOWNLOAD_URL" || {
+                            echo "ERROR: Failed to download checkpoint zip from Google Drive"
+                            exit 1
+                        }
+                    else
+                        echo "ERROR: Neither wget nor curl is available for downloading checkpoint zip"
+                        exit 1
+                    fi
+                    
+                    # Extract zip file to Models/checkpoints directory (preserve directory structure)
+                    CHECKPOINT_BASE_DIR="$PROJECT_ROOT/Models/checkpoints"
+                    mkdir -p "$CHECKPOINT_BASE_DIR"
+                    if command -v unzip >/dev/null 2>&1; then
+                        # Extract to a temp directory first to handle different zip structures
+                        TEMP_EXTRACT="$PROJECT_ROOT/temp_checkpoints_extract"
+                        mkdir -p "$TEMP_EXTRACT"
+                        unzip -q -o "$ZIP_PATH" -d "$TEMP_EXTRACT" || {
+                            echo "ERROR: Failed to extract checkpoint zip file"
+                            rm -rf "$TEMP_EXTRACT" "$ZIP_PATH"
+                            exit 1
+                        }
+                        
+                        # Move extracted files to correct location
+                        # Handle both cases: zip contains checkpoints/ folder or files are at root
+                        if [ -d "$TEMP_EXTRACT/checkpoints" ]; then
+                            cp -r "$TEMP_EXTRACT/checkpoints"/* "$CHECKPOINT_BASE_DIR/" 2>/dev/null || true
+                        elif [ -d "$TEMP_EXTRACT/Models/checkpoints" ]; then
+                            cp -r "$TEMP_EXTRACT/Models/checkpoints"/* "$CHECKPOINT_BASE_DIR/" 2>/dev/null || true
+                        else
+                            # Files might be at root of zip, find all .pt files and copy to appropriate subdirectories
+                            find "$TEMP_EXTRACT" -name "*.pt" -type f | while read -r pt_file; do
+                                # Try to preserve directory structure
+                                rel_path="${pt_file#$TEMP_EXTRACT/}"
+                                target_path="$CHECKPOINT_BASE_DIR/$rel_path"
+                                target_dir=$(dirname "$target_path")
+                                mkdir -p "$target_dir"
+                                cp "$pt_file" "$target_path"
+                            done
+                        fi
+                        
+                        # Clean up
+                        rm -rf "$TEMP_EXTRACT" "$ZIP_PATH"
+                        touch "$ZIP_MARKER"
+                        echo "✓ All checkpoints extracted successfully"
+                    else
+                        echo "ERROR: unzip is not available for extracting checkpoint zip"
+                        rm -f "$ZIP_PATH"
+                        exit 1
+                    fi
+                else
+                    echo "Checkpoints zip already extracted (skipping download)"
+                fi
+                
+                # Verify the specific checkpoint file now exists and is valid
+                if [ -f "$CHECKPOINT_PATH_ABS" ]; then
+                    new_file_size=$(stat -f%z "$CHECKPOINT_PATH_ABS" 2>/dev/null || stat -c%s "$CHECKPOINT_PATH_ABS" 2>/dev/null || echo "0")
+                    if [ "$new_file_size" -ge 1024 ]; then
+                        echo "✓ Checkpoint file verified (size: $new_file_size bytes)"
+                        # Skip individual file download, we already have it from zip
+                        continue
+                    fi
+                fi
+            fi
+            
+            # Construct download link
+            if [ -n "$GDRIVE_FILE_ID" ]; then
+                GDRIVE_LINK="https://drive.google.com/uc?id=${GDRIVE_FILE_ID}"
+            elif [ -z "$GDRIVE_LINK" ] && [ -z "$GDRIVE_FILE_ID" ] && [ -z "$GDRIVE_FOLDER_ID" ]; then
+                echo "ERROR: Checkpoint file is a pointer file but no Google Drive link provided."
+                echo "Please add one of the following to config.json:"
+                echo "  1. 'checkpoint_zip_id': Google Drive file ID of a zip file containing all checkpoints"
+                echo "  2. 'checkpoint_folder_id': Google Drive folder ID (requires zip file approach)"
+                echo "  3. 'checkpoint_files': Mapping of individual checkpoint files to file IDs"
+                echo "  4. 'checkpoint_gdrive_link': Direct link to a single checkpoint file"
+                echo ""
+                echo "Example config.json entries:"
+                echo "  \"checkpoint_zip_id\": \"FILE_ID\"  (recommended for folder approach)"
+                echo "  OR"
+                echo "  \"checkpoint_files\": {"
+                echo "    \"$CHECKPOINT_BASENAME\": \"FILE_ID\""
+                echo "  }"
+                exit 1
+            fi
+            
+            # Install gdown if not available
+            if ! command -v gdown >/dev/null 2>&1; then
+                echo "Installing gdown for Google Drive download..."
+                pip install --quiet gdown >/dev/null 2>&1 || {
+                    echo "Warning: Failed to install gdown via pip, trying alternative method..."
+                    # Try using wget/curl with direct download link
+                    if [ -n "$GDRIVE_FILE_ID" ]; then
+                        GDRIVE_LINK="https://drive.google.com/uc?export=download&id=${GDRIVE_FILE_ID}"
+                    fi
+                }
+            fi
+            
+            # Download checkpoint file
+            if command -v gdown >/dev/null 2>&1; then
+                echo "Downloading checkpoint from Google Drive using gdown..."
+                if [ -n "$GDRIVE_FILE_ID" ]; then
+                    gdown "$GDRIVE_FILE_ID" -O "$CHECKPOINT_PATH_ABS" || {
+                        echo "ERROR: Failed to download checkpoint from Google Drive"
+                        exit 1
+                    }
+                else
+                    gdown "$GDRIVE_LINK" -O "$CHECKPOINT_PATH_ABS" || {
+                        echo "ERROR: Failed to download checkpoint from Google Drive"
+                        exit 1
+                    }
+                fi
+            else
+                # Fallback: use wget/curl with direct download
+                echo "Downloading checkpoint from Google Drive using wget/curl..."
+                if [ -n "$GDRIVE_FILE_ID" ]; then
+                    DOWNLOAD_URL="https://drive.google.com/uc?export=download&id=${GDRIVE_FILE_ID}"
+                else
+                    # Extract file ID from Google Drive link if it's a share link
+                    FILE_ID=$(echo "$GDRIVE_LINK" | grep -oP '/d/([a-zA-Z0-9_-]+)' | cut -d'/' -f3 || echo "")
+                    if [ -n "$FILE_ID" ]; then
+                        DOWNLOAD_URL="https://drive.google.com/uc?export=download&id=${FILE_ID}"
+                    else
+                        DOWNLOAD_URL="$GDRIVE_LINK"
+                    fi
+                fi
+                
+                # Use wget or curl
+                if command -v wget >/dev/null 2>&1; then
+                    wget --quiet --show-progress -O "$CHECKPOINT_PATH_ABS" "$DOWNLOAD_URL" || {
+                        echo "ERROR: Failed to download checkpoint from Google Drive"
+                        exit 1
+                    }
+                elif command -v curl >/dev/null 2>&1; then
+                    curl -L -o "$CHECKPOINT_PATH_ABS" "$DOWNLOAD_URL" || {
+                        echo "ERROR: Failed to download checkpoint from Google Drive"
+                        exit 1
+                    }
+                else
+                    echo "ERROR: Neither gdown, wget, nor curl is available for downloading checkpoint"
+                    exit 1
+                fi
+            fi
+            
+            # Verify downloaded file size
+            new_file_size=$(stat -f%z "$CHECKPOINT_PATH_ABS" 2>/dev/null || stat -c%s "$CHECKPOINT_PATH_ABS" 2>/dev/null || echo "0")
+            if [ "$new_file_size" -lt 1024 ]; then
+                echo "ERROR: Downloaded file is still too small ($new_file_size bytes). Download may have failed."
+                exit 1
+            fi
+            echo "✓ Checkpoint downloaded successfully (size: $new_file_size bytes)"
+        fi
+    fi
+    
     echo "Using checkpoint: $CHECKPOINT_PATH"
+    
+    # Convert checkpoint path to absolute (if not already done during Google Drive download)
+    if [ -z "$CHECKPOINT_PATH_ABS" ]; then
+        CHECKPOINT_PATH_ABS="$(resolve_abs_path "$CHECKPOINT_PATH")"
+    fi
     
     # Determine myelination suffix for filenames
     if [[ "${MYELINATION,,}" == "true" || "${MYELINATION}" == "True" || "${MYELINATION}" == "1" ]]; then
@@ -343,7 +503,7 @@ for HEMISPHERE in lh rh; do
     fi
     
     # Convert all paths to absolute (no bind mounts needed - Singularity can access host paths directly)
-    CHECKPOINT_PATH_ABS="$(resolve_abs_path "$CHECKPOINT_PATH")"
+    # CHECKPOINT_PATH_ABS is already set above if we downloaded from Google Drive
     PROJECT_ROOT_ABS="$(resolve_abs_path "$PROJECT_ROOT")"
     FREESURFER_SUBJECTS_DIR_ABS="$(resolve_abs_path "$FREESURFER_SUBJECTS_DIR")"
     # OUTPUT_DIR_STEP1 is already absolute from above, but ensure it's resolved
