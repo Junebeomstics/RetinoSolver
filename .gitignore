@@ -162,6 +162,7 @@ eccentricity_*_noMyelin/
 *.nii
 *.nii.gz
 *.mgz
+*.pt
 
 # Large data files
 *.mat

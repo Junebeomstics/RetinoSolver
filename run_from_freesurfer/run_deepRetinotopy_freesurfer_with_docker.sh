@@ -696,7 +696,7 @@ if [ "$SKIP_PREPROCESSING" = false ]; then
 fi
 
 # Build pipeline commands - Step 2: Inference
-STEP2_CMD="python Models/run_inference_freesurfer.py"
+STEP2_CMD="python run_from_freesurfer/run_inference_freesurfer.py"
 STEP2_CMD="$STEP2_CMD --freesurfer_dir $FREESURFER_DIR_FOR_CMD"
 STEP2_CMD="$STEP2_CMD --checkpoint_path $CHECKPOINT_PATH_FOR_CMD"
 STEP2_CMD="$STEP2_CMD --model_type $MODEL_TYPE"

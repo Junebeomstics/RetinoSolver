@@ -23,7 +23,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 # Add Models directory to path
-models_dir = osp.dirname(osp.abspath(__file__))
+models_dir = osp.join(project_root, 'Models')
 if models_dir not in sys.path:
     sys.path.insert(0, models_dir)
 
@@ -300,6 +300,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-

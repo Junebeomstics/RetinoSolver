@@ -667,7 +667,7 @@ for HEMISPHERE in lh rh; do
     # Use Step 1 output directory as freesurfer_dir for Step 2 (to find template files)
     # Step 2 will save results to output_dir if specified
     echo "Executing Step 2 command:"
-    echo "  python $PROJECT_ROOT_ABS/Models/run_inference_freesurfer.py"
+    echo "  python $PROJECT_ROOT_ABS/run_from_freesurfer/run_inference_freesurfer.py"
     echo "  Arguments:"
     echo "    --freesurfer_dir $OUTPUT_DIR_STEP1_ABS"
     echo "    --checkpoint_path $CHECKPOINT_PATH_ABS"
@@ -707,7 +707,7 @@ WRAPPER_EOF
     cd "$PROJECT_ROOT_ABS" && singularity exec -e \
         "$SINGULARITY_IMAGE" \
         "$TEMP_WRAPPER" \
-        "$PROJECT_ROOT_ABS/Models/run_inference_freesurfer.py" \
+        "$PROJECT_ROOT_ABS/run_from_freesurfer/run_inference_freesurfer.py" \
         --freesurfer_dir "$OUTPUT_DIR_STEP1_ABS" \
         --checkpoint_path "$CHECKPOINT_PATH_ABS" \
         --model_type "$MODEL_TYPE" \

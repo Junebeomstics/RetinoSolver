@@ -284,7 +284,7 @@ echo "==============================================="
 echo "[Step 2] Running Inference"
 echo "==============================================="
 
-STEP2_CMD="cd /workspace && python Models/run_inference_freesurfer.py \
+STEP2_CMD="cd /workspace && python run_from_freesurfer/run_inference_freesurfer.py \
     --freesurfer_dir /mnt/nsd_freesurfer \
     --checkpoint_path $CHECKPOINT_PATH \
     --model_type $MODEL_TYPE \
