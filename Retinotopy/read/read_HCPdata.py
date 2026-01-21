@@ -9,7 +9,8 @@ from torch_geometric.data import Data
 
 def read_HCP(path, Hemisphere=None, index=None, surface=None, threshold=None,
              shuffle=True, visual_mask_L=None, visual_mask_R=None,
-             faces_L=None, faces_R=None, myelination=None, prediction=None):
+             faces_L=None, faces_R=None, myelination=None, prediction=None,
+             shuffle_seed=None):
     """Read the data files and create a data object with attributes x, y, pos,
         faces and R2.
 
@@ -60,7 +61,9 @@ def read_HCP(path, Hemisphere=None, index=None, surface=None, threshold=None,
         subjects = fp.read().split("\n")
     subjects = subjects[0:len(subjects) - 1]
 
-    seed(1)
+    # Use shuffle_seed if provided, otherwise default to 1
+    shuffle_seed_val = shuffle_seed if shuffle_seed is not None else 1
+    seed(shuffle_seed_val)
     if shuffle == True:
         np.random.shuffle(subjects)
 

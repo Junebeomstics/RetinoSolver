@@ -113,7 +113,7 @@ parser.add_argument('--early_stopping_patience', type=int, default=30,
 parser.add_argument('--checkpoint_path', type=str, default=None,
                     help='Path to local checkpoint file (.pt) to load (if provided, only test will be run)')
 parser.add_argument('--seed', type=int, default=42,
-                    help='Random seed for reproducibility (default: 42)')
+                    help='Random seed for reproducibility and data splitting (default: 42). For data splitting, if you want to use default seed=1, set --seed 1')
 
 args = parser.parse_args()
 
@@ -131,6 +131,13 @@ def set_seed(seed):
 
 set_seed(args.seed)
 print(f"Random seed set to: {args.seed}")
+
+# Use the same seed for data splitting
+# Note: For backward compatibility, if you want to use default data seed=1, 
+# explicitly set --seed 1. Otherwise, the specified seed will be used for both 
+# model training randomness and data splitting.
+data_split_seed = args.seed
+print(f"Data splitting seed: {data_split_seed} (same as training seed)")
 
 # Convert run_test string to boolean
 args.run_test = args.run_test.lower() in ['true', '1']
@@ -169,15 +176,20 @@ wandb_run = None
 # Define myelination suffix for naming (used in wandb run name, folder names, and file names)
 myelination_suffix = "" if args.myelination else "_noMyelin"
 
+# Add seed suffix to project name and file names if seed is not default (42)
+# This helps distinguish experiments with different seeds
+data_seed_suffix = f"_seed{data_split_seed}" if data_split_seed != 42 else ""
+wandb_project_name = args.wandb_project + data_seed_suffix if data_split_seed != 42 else args.wandb_project
+
 # Initialize Wandb if enabled
 if args.use_wandb and WANDB_AVAILABLE and not test_only_mode:
     try:
-        # Create run name from model config (include myelination status)
-        run_name = f"{args.prediction}_{args.hemisphere}_{args.model_type}{myelination_suffix}"
+        # Create run name from model config (include myelination status and data seed)
+        run_name = f"{args.prediction}_{args.hemisphere}_{args.model_type}{myelination_suffix}{data_seed_suffix}"
         
         # Initialize wandb
         wandb.init(
-            project=args.wandb_project,
+            project=wandb_project_name,
             entity=args.wandb_entity,
             name=run_name,
             config=vars(args),
@@ -201,7 +213,8 @@ train_dataset = Retinotopy(
     n_examples=args.n_examples,
     prediction=args.prediction,
     myelination=args.myelination,
-    hemisphere=args.hemisphere
+    hemisphere=args.hemisphere,
+    seed=data_split_seed
 )
 dev_dataset = Retinotopy(
     path, 'Development',
@@ -210,7 +223,8 @@ dev_dataset = Retinotopy(
     n_examples=args.n_examples,
     prediction=args.prediction,
     myelination=args.myelination,
-    hemisphere=args.hemisphere
+    hemisphere=args.hemisphere,
+    seed=data_split_seed
 )
 train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 dev_loader = DataLoader(dev_dataset, batch_size=args.batch_size, shuffle=False)
@@ -226,7 +240,8 @@ if args.run_test:
         n_examples=args.n_examples,
         prediction=args.prediction,
         myelination=args.myelination,
-        hemisphere=args.hemisphere
+        hemisphere=args.hemisphere,
+        seed=data_split_seed
     )
     # Use batch_size=args.batch_size for test set (note: may want batch_size=1 for per-subject processing)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
@@ -749,7 +764,7 @@ if not test_only_mode:
     if best_model_state is not None:
         best_model_file = osp.join(
             output_path,
-            f'{prediction_short}_{args.hemisphere}_{args.model_type}{myelination_suffix}_best_model_epoch{best_epoch}.pt'
+            f'{prediction_short}_{args.hemisphere}_{args.model_type}{myelination_suffix}{data_seed_suffix}_best_model_epoch{best_epoch}.pt'
         )
         torch.save(best_model_state, best_model_file)
         print(f"Best model saved to: {best_model_file} (epoch {best_epoch}, MAE_thr: {best_mae_thr:.4f})")
@@ -767,7 +782,7 @@ if not test_only_mode:
     # Save final model (most recent epoch)
     final_model_file = osp.join(
         output_path,
-        f'{prediction_short}_{args.hemisphere}_{args.model_type}{myelination_suffix}_final_model.pt'
+        f'{prediction_short}_{args.hemisphere}_{args.model_type}{myelination_suffix}{data_seed_suffix}_final_model.pt'
     )
     torch.save(model.state_dict(), final_model_file)
     print(f"Final model saved to: {final_model_file}")
@@ -847,7 +862,7 @@ if args.run_test:
         # Only load from file if not in test-only mode
         final_model_file = osp.join(
             output_path,
-            f'{prediction_short}_{args.hemisphere}_{args.model_type}{myelination_suffix}_final_model.pt'
+            f'{prediction_short}_{args.hemisphere}_{args.model_type}{myelination_suffix}{data_seed_suffix}_final_model.pt'
         )
         if osp.exists(final_model_file):
             model.load_state_dict(torch.load(final_model_file, map_location=device))
@@ -870,7 +885,7 @@ if args.run_test:
         # Save final model test results
         final_test_file = osp.join(
             output_path,
-            f'{prediction_short}_{args.hemisphere}_{args.model_type}{myelination_suffix}_final_test_results.pt'
+            f'{prediction_short}_{args.hemisphere}_{args.model_type}{myelination_suffix}{data_seed_suffix}_final_test_results.pt'
         )
         torch.save({
             'Epoch': final_epoch,
@@ -926,7 +941,7 @@ if args.run_test:
         # Save final model test results
         final_test_file = osp.join(
             output_path,
-            f'{prediction_short}_{args.hemisphere}_{args.model_type}{myelination_suffix}_best_test_results.pt'
+            f'{prediction_short}_{args.hemisphere}_{args.model_type}{myelination_suffix}{data_seed_suffix}_best_test_results.pt'
         )
         torch.save({
             'Epoch': final_epoch,

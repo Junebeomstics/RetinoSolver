@@ -1,4 +1,5 @@
 import os.path as osp
+import os
 import scipy.io
 import torch
 
@@ -23,11 +24,13 @@ class Retinotopy(InMemoryDataset):
                  n_examples=None,
                  myelination=None,
                  prediction=None,
-                 hemisphere=None):
+                 hemisphere=None,
+                 seed=None):
         self.myelination = myelination
         self.prediction = prediction
         self.n_examples = int(n_examples)
         self.hemisphere = hemisphere
+        self.seed = seed  # Seed for subject shuffling (0, 1, 2, etc.)
         super(Retinotopy, self).__init__(root, transform, pre_transform,
                                          pre_filter)
         self.set = set
@@ -38,6 +41,17 @@ class Retinotopy(InMemoryDataset):
         else:
             path = self.processed_paths[2]
         self.data, self.slices = torch.load(path)
+    
+    @property
+    def processed_dir(self):
+        """Override processed_dir to include seed folder"""
+        if self.seed is not None:
+            # Create seed-specific folder: processed/seed0/, processed/seed1/, etc.
+            seed_folder = f"seed{self.seed}"
+            return osp.join(self.root, 'processed', seed_folder)
+        else:
+            # Default: processed/ (for seed=None, uses default seed=1)
+            return osp.join(self.root, 'processed')
 
     @property
     def raw_file_names(self):
@@ -61,6 +75,7 @@ class Retinotopy(InMemoryDataset):
 
     @property
     def processed_file_names(self):
+        # File names are now consistent, seed is handled by folder structure
         if self.hemisphere == 'Left':
             if self.myelination == True:
                 if self.prediction == 'eccentricity':
@@ -153,6 +168,11 @@ class Retinotopy(InMemoryDataset):
                                                                  self.raw_dir))
 
     def process(self):
+        # Create seed-specific directory if it doesn't exist
+        processed_dir = self.processed_dir
+        if not osp.exists(processed_dir):
+            os.makedirs(processed_dir, exist_ok=True)
+        
         # extract_zip(self.raw_paths[0], self.raw_dir, log=False)
         path = osp.join(self.raw_dir, 'converted')
         data_list = []
@@ -167,12 +187,15 @@ class Retinotopy(InMemoryDataset):
         faces_L = labels(scipy.io.loadmat(osp.join(path, 'tri_faces_L.mat'))[
                              'tri_faces_L'] - 1, index_L_mask)
 
+        # Use seed for shuffling if specified, otherwise use default seed=1
+        shuffle_seed = self.seed if self.seed is not None else 1
+        
         for i in range(0, self.n_examples):
             data = read_HCP(path, Hemisphere=self.hemisphere, index=i,
                             surface='mid', visual_mask_L=final_mask_L,
                             visual_mask_R=final_mask_R, faces_L=faces_L,
                             faces_R=faces_R, myelination=self.myelination,
-                            prediction=self.prediction)
+                            prediction=self.prediction, shuffle_seed=shuffle_seed)
             if self.pre_transform is not None:
                 data = self.pre_transform(data)
             data_list.append(data)

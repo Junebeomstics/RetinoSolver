@@ -65,6 +65,9 @@ MODEL_TYPES=("transolver_optionC") #"baseline" "transolver_optionA" "transolver_
 # Myelination to run
 USE_MYELINATION="True"
 
+# Seeds to run (for subject splitting)
+SEEDS=(0 1 2)  # Run experiments with seeds 0, 1, 2. Set to (0) to run only seed 0, or () to use default seed=1
+
 # Check if Docker is available
 if ! command -v docker &> /dev/null; then
     echo "Error: Docker is not installed or not in PATH"
@@ -173,6 +176,7 @@ run_experiment() {
     local model_type=$1
     local prediction=$2
     local hemisphere=$3
+    local seed=$4  # Seed for subject splitting (optional, can be empty)
     
     # Wait for an available slot
     wait_for_slot
@@ -182,6 +186,9 @@ run_experiment() {
     echo "  Model: $model_type"
     echo "  Prediction: $prediction"
     echo "  Hemisphere: $hemisphere"
+    if [ ! -z "$seed" ]; then
+        echo "  Seed: $seed"
+    fi
     echo "  Running jobs: ${#running_jobs[@]}/$MAX_CONCURRENT_JOBS"
     echo "=========================================="
     
@@ -219,6 +226,11 @@ run_experiment() {
             --n_examples $N_EXAMPLES \
             --output_dir $OUTPUT_DIR \
             --myelination $USE_MYELINATION"
+        
+        # Add seed parameter if provided
+        if [ ! -z "$seed" ]; then
+            PYTHON_CMD="$PYTHON_CMD --seed $seed"
+        fi
     else
         # Use default parameters for other model types
         USE_N_EPOCHS=$N_EPOCHS
@@ -240,6 +252,11 @@ run_experiment() {
             --n_examples $N_EXAMPLES \
             --output_dir $OUTPUT_DIR \
             --myelination $USE_MYELINATION"
+        
+        # Add seed parameter if provided
+        if [ ! -z "$seed" ]; then
+            PYTHON_CMD="$PYTHON_CMD --seed $seed"
+        fi
     fi
     
     # Add Wandb options if enabled
@@ -294,17 +311,34 @@ if [ "$USE_WANDB" = "true" ]; then
     fi
 fi
 # echo "  Neptune: $USE_NEPTUNE"  # COMMENTED OUT
-echo "Total experiments: $((${#MODEL_TYPES[@]} * ${#PREDICTIONS[@]} * ${#HEMISPHERES[@]}))"
+# Calculate total experiments (including seeds if specified)
+if [ ${#SEEDS[@]} -gt 0 ]; then
+    TOTAL_EXPERIMENTS=$((${#MODEL_TYPES[@]} * ${#PREDICTIONS[@]} * ${#HEMISPHERES[@]} * ${#SEEDS[@]}))
+    echo "Seeds: ${SEEDS[@]}"
+else
+    TOTAL_EXPERIMENTS=$((${#MODEL_TYPES[@]} * ${#PREDICTIONS[@]} * ${#HEMISPHERES[@]}))
+    echo "Seeds: (default seed=1)"
+fi
+echo "Total experiments: $TOTAL_EXPERIMENTS"
 echo "Max concurrent jobs: $MAX_CONCURRENT_JOBS"
 echo "=========================================="
 echo ""
 
-# Run all combinations (PREDICTIONS -> HEMISPHERES -> MODEL_TYPES)
+# Run all combinations (PREDICTIONS -> HEMISPHERES -> MODEL_TYPES -> SEEDS)
 for prediction in "${PREDICTIONS[@]}"; do
     for hemisphere in "${HEMISPHERES[@]}"; do
         for model_type in "${MODEL_TYPES[@]}"; do
-            run_experiment $model_type $prediction $hemisphere
-            sleep 5
+            if [ ${#SEEDS[@]} -gt 0 ]; then
+                # Run with each seed
+                for seed in "${SEEDS[@]}"; do
+                    run_experiment $model_type $prediction $hemisphere $seed
+                    sleep 5
+                done
+            else
+                # Run without seed (uses default seed=1)
+                run_experiment $model_type $prediction $hemisphere ""
+                sleep 5
+            fi
         done
     done
 done
