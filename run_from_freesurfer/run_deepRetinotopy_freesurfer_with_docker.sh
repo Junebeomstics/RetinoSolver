@@ -14,13 +14,19 @@ CONTAINER_NAME="deepretinotopy_pipeline"
 USE_GPU=${USE_GPU:-"true"}  # Set to "false" to disable GPU
 
 # Default parameters
-FREESURFER_DIR="./HCP_freesurfer/proj-5dceb267c4ae281d2c297b92/sub-100610/dt-neuro-freesurfer.tag-v5.tag-thalamic_nuclei.id-5f5d4b461f61ef8545553c83"
-#"./HCP_freesurfer/proj-5dceb267c4ae281d2c297b92/sub-100206/dt-neuro-freesurfer.tag-v5.tag-thalamic_nuclei.id-5f60f2e61e8d5d00ae3b33fc" 
-#"proj-5ffc884d2ba0fba7a7e89132/sub-100610/dt-neuro-freesurfer.tag-acpc_aligned.id-607888953034dfad4dddbef1"
+
 SUBJECT_ID=""
+SUBJECT_ID="sub-100206"
+FREESURFER_SUBDIR=$(find ./HCP_freesurfer/proj-5dceb267c4ae281d2c297b92/$SUBJECT_ID/ -maxdepth 1 -type d -name "dt-neuro-freesurfer.*" | head -n1)
+if [[ -z "$FREESURFER_SUBDIR" ]]; then
+    echo "Error: No FreeSurfer directory found for subject $SUBJECT_ID"
+    exit 1
+fi
+FREESURFER_DIR="$FREESURFER_SUBDIR"
+
 HEMISPHERE="lh"
 MODEL_TYPE="baseline"
-PREDICTION="polarAngle" #  "pRFsize" "eccentricity"
+PREDICTION="eccentricity" #"polarAngle" #  "pRFsize" "eccentricity"
 MYELINATION="False"
 # Automatically find checkpoint based on MODEL_TYPE, PREDICTION, HEMISPHERE, MYELINATION
 
@@ -686,9 +692,9 @@ if [ "$SKIP_PREPROCESSING" = false ]; then
     STEP1_CMD="$STEP1_CMD -h $HEMISPHERE_SHORT"
     STEP1_CMD="$STEP1_CMD -j $N_JOBS"
     
-    if [ ! -z "$SUBJECT_ID" ]; then
-        STEP1_CMD="$STEP1_CMD -i $SUBJECT_ID"
-    fi
+    # if [ ! -z "$SUBJECT_ID" ]; then
+    #     STEP1_CMD="$STEP1_CMD" -i $SUBJECT_ID"
+    # fi
     
     if [ ! -z "$OUTPUT_DIR_FOR_CMD" ]; then
         STEP1_CMD="$STEP1_CMD -o $OUTPUT_DIR_FOR_CMD"
@@ -704,9 +710,9 @@ STEP2_CMD="$STEP2_CMD --prediction $PREDICTION"
 STEP2_CMD="$STEP2_CMD --hemisphere $HEMISPHERE_LONG"
 STEP2_CMD="$STEP2_CMD --myelination $MYELINATION"
 
-if [ ! -z "$SUBJECT_ID" ]; then
-    STEP2_CMD="$STEP2_CMD --subject_id \"$SUBJECT_ID\""
-fi
+# if [ ! -z "$SUBJECT_ID" ]; then
+#     STEP2_CMD="$STEP2_CMD --subject_id \"$SUBJECT_ID\""
+# fi
 
 if [ ! -z "$OUTPUT_DIR_FOR_CMD" ]; then
     STEP2_CMD="$STEP2_CMD --output_dir $OUTPUT_DIR_FOR_CMD"
@@ -724,9 +730,9 @@ if [ "$SKIP_NATIVE_CONVERSION" = false ]; then
     STEP3_CMD="$STEP3_CMD -y $MYELINATION"
     STEP3_CMD="$STEP3_CMD -j $N_JOBS"
     
-    if [ ! -z "$SUBJECT_ID" ]; then
-        STEP3_CMD="$STEP3_CMD -i $SUBJECT_ID"
-    fi
+    # if [ ! -z "$SUBJECT_ID" ]; then
+    #     STEP3_CMD="$STEP3_CMD -i $SUBJECT_ID"
+    # fi
     
     if [ ! -z "$OUTPUT_DIR_FOR_CMD" ]; then
         STEP3_CMD="$STEP3_CMD -o $OUTPUT_DIR_FOR_CMD"

@@ -168,7 +168,9 @@ eccentricity_*_noMyelin/
 *.mat
 !Retinotopy/data/raw/converted/*.mat
 Retinotopy/data/raw/surfaces/
-
+Retinotopy/data/processed/
+# Specifically ignore .pt files in processed directory
+Retinotopy/data/processed/*.pt
 # Large notebooks (with outputs)
 visualize_output_pRF.ipynb
 analyze_cifti_and_mat.ipynb
