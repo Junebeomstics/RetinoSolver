@@ -1,0 +1,898 @@
+#!/bin/bash
+#PBS -l nodes=1:ppn=8,walltime=3:00:00
+#PBS -N app-deepRetinotopy
+#PBS -V
+set -e  # Exit on error (remove -x to avoid verbose command logging)
+
+# Brainlife app for deepRetinotopy inference pipeline
+# Based on run_deepRetinotopy_freesurfer_with_docker.sh
+# Uses Singularity instead of Docker for brainlife compatibility
+
+# Check if jq is available
+if ! command -v jq >/dev/null 2>&1; then
+    echo "ERROR: jq command is required but not found. Please install jq."
+    exit 1
+fi
+
+# Check if config.json exists
+if [ ! -f "config.json" ]; then
+    echo "ERROR: config.json not found in current directory: $(pwd)"
+    exit 1
+fi
+
+# Read configuration from config.json
+FREESURFER_DIR=$(jq -r '.freesurfer' config.json)
+MODEL_TYPE=$(jq -r '.model_type' config.json)
+PREDICTION=$(jq -r '.prediction_target' config.json)
+MYELINATION=$(jq -r '.myelination' config.json)
+
+# Validate required parameters
+if [ -z "$FREESURFER_DIR" ] || [ "$FREESURFER_DIR" == "null" ]; then
+    echo "ERROR: freesurfer_dir is required in config.json"
+    exit 1
+fi
+
+if [ -z "$MODEL_TYPE" ] || [ "$MODEL_TYPE" == "null" ]; then
+    echo "ERROR: model_type is required in config.json"
+    exit 1
+fi
+
+if [ -z "$PREDICTION" ] || [ "$PREDICTION" == "null" ]; then
+    echo "ERROR: prediction_target is required in config.json"
+    exit 1
+fi
+
+if [ -z "$MYELINATION" ] || [ "$MYELINATION" == "null" ]; then
+    MYELINATION="False"
+fi
+
+# Set base directory
+# For brainlife.io, use current working directory if script path resolution fails
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || SCRIPT_DIR="$(pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+# Try to change directory, but don't fail if already there
+cd "$PROJECT_ROOT" 2>/dev/null || true
+
+# Helper function to convert paths to absolute
+resolve_abs_path() {
+    local path="$1"
+    if command -v realpath >/dev/null 2>&1; then
+        realpath "$path" 2>/dev/null || echo "$path"
+    elif command -v readlink >/dev/null 2>&1; then
+        readlink -f "$path" 2>/dev/null || echo "$path"
+    else
+        # Fallback: if relative path, make it absolute
+        if [[ "$path" != /* ]]; then
+            echo "$(pwd)/$path"
+        else
+            echo "$path"
+        fi
+    fi
+}
+
+# Singularity settings
+# Strategy: Use local Docker image if available, save to tar and convert to SIF
+# This avoids network access when Docker image is already present
+DOCKER_IMAGE_NAME="vnmd/deepretinotopy_1.0.18:latest"
+SIF_IMAGE_NAME="deepretinotopy_1.0.18.sif"
+SIF_IMAGE_PATH="$PROJECT_ROOT/$SIF_IMAGE_NAME"
+DOCKER_TAR_NAME="deepretinotopy_1.0.18.tar"
+DOCKER_TAR_PATH="$PROJECT_ROOT/$DOCKER_TAR_NAME"
+
+# Check if SIF file already exists
+if [ -f "$SIF_IMAGE_PATH" ]; then
+    echo "Found existing SIF file: $SIF_IMAGE_PATH"
+    SINGULARITY_IMAGE="$SIF_IMAGE_PATH"
+elif command -v docker >/dev/null 2>&1 && docker image inspect "$DOCKER_IMAGE_NAME" >/dev/null 2>&1; then
+    echo "Found local Docker image: $DOCKER_IMAGE_NAME"
+    
+    # Check if singularity or apptainer command is available
+    if command -v apptainer >/dev/null 2>&1; then
+        CONTAINER_CMD="apptainer"
+    elif command -v singularity >/dev/null 2>&1; then
+        CONTAINER_CMD="singularity"
+    else
+        echo "ERROR: Neither apptainer nor singularity command found"
+        exit 1
+    fi
+    
+    # Check if tar file exists, if not create it from Docker image
+    if [ ! -f "$DOCKER_TAR_PATH" ]; then
+        echo "Saving Docker image to tar file (this may take a few minutes)..."
+        if ! docker save "$DOCKER_IMAGE_NAME" -o "$DOCKER_TAR_PATH"; then
+            echo "ERROR: Failed to save Docker image to tar file"
+            exit 1
+        fi
+        echo "Docker image saved to: $DOCKER_TAR_PATH"
+    else
+        echo "Found existing Docker tar file: $DOCKER_TAR_PATH"
+    fi
+    
+    # Convert tar file to SIF
+    echo "Converting Docker tar to SIF format (this may take a few minutes)..."
+    if $CONTAINER_CMD build --force "$SIF_IMAGE_PATH" "docker-archive://${DOCKER_TAR_PATH}" 2>&1; then
+        echo "Successfully converted Docker image to SIF: $SIF_IMAGE_PATH"
+        SINGULARITY_IMAGE="$SIF_IMAGE_PATH"
+        # Optionally remove tar file to save space (uncomment if desired)
+        rm -f "$DOCKER_TAR_PATH"
+    else
+        echo "ERROR: Failed to convert Docker tar to SIF"
+        exit 1
+    fi
+else
+    echo "Local Docker image not found: $DOCKER_IMAGE_NAME"
+    echo "Will use docker:// (requires network access to Docker Hub)"
+    SINGULARITY_IMAGE="docker://${DOCKER_IMAGE_NAME}"
+fi
+
+echo "Using container image: $SINGULARITY_IMAGE"
+
+# Default parameters
+HCP_SURFACE_DIR="surface"
+# Use nproc if available, otherwise default to 4 (or use environment variable)
+if command -v nproc >/dev/null 2>&1; then
+    N_JOBS=$(($(nproc) - 1))
+else
+    # Fallback: use environment variable or default
+    N_JOBS=${NPROC:-4}
+fi
+[ $N_JOBS -lt 1 ] && N_JOBS=1
+
+# Convert FREESURFER_DIR to absolute path
+# Use readlink -f if realpath is not available
+if command -v realpath >/dev/null 2>&1; then
+    FREESURFER_DIR_ABS=$(realpath "$FREESURFER_DIR" 2>/dev/null || echo "$FREESURFER_DIR")
+elif command -v readlink >/dev/null 2>&1; then
+    FREESURFER_DIR_ABS=$(readlink -f "$FREESURFER_DIR" 2>/dev/null || echo "$FREESURFER_DIR")
+else
+    # Fallback: if relative path, make it absolute
+    if [[ "$FREESURFER_DIR" != /* ]]; then
+        FREESURFER_DIR_ABS="$(pwd)/$FREESURFER_DIR"
+    else
+        FREESURFER_DIR_ABS="$FREESURFER_DIR"
+    fi
+fi
+if [ ! -d "$FREESURFER_DIR_ABS" ]; then
+    echo "ERROR: FreeSurfer directory not found: $FREESURFER_DIR"
+    exit 1
+fi
+
+# Determine if FREESURFER_DIR is a subject directory or subjects directory
+# Check if it has a 'surf' subdirectory (subject directory) or contains subject directories
+SUBJECT_ID=""
+if [ -d "$FREESURFER_DIR_ABS/surf" ]; then
+    # This is a subject directory
+    SUBJECT_ID=$(basename "$FREESURFER_DIR_ABS")
+    FREESURFER_SUBJECTS_DIR=$(dirname "$FREESURFER_DIR_ABS")
+else
+    # This is a subjects directory, need to find subject
+    # For brainlife, we assume there's one subject
+    for item in "$FREESURFER_DIR_ABS"/*; do
+        if [ -d "$item" ] && [ -d "$item/surf" ] && [ "$(basename "$item")" != "fsaverage" ]; then
+            SUBJECT_ID=$(basename "$item")
+            break
+        fi
+    done
+    if [ -z "$SUBJECT_ID" ]; then
+        echo "ERROR: Could not find subject directory in $FREESURFER_DIR_ABS"
+        exit 1
+    fi
+    FREESURFER_SUBJECTS_DIR="$FREESURFER_DIR_ABS"
+fi
+
+echo "Detected subject ID: $SUBJECT_ID"
+echo "FreeSurfer subjects directory: $FREESURFER_SUBJECTS_DIR"
+
+# Map hemisphere names
+map_hemisphere() {
+    local hemi=$1
+    if [[ "${hemi,,}" == "lh" ]]; then
+        echo "Left"
+    elif [[ "${hemi,,}" == "rh" ]]; then
+        echo "Right"
+    else
+        echo "${hemi}"
+    fi
+}
+
+# Compose directory and filename patterns for checkpoint search
+if [[ "${MYELINATION,,}" == "true" || "${MYELINATION}" == "True" || "${MYELINATION}" == "1" ]]; then
+    NO_MYELIN_SUFFIX=""
+else
+    NO_MYELIN_SUFFIX="_noMyelin"
+fi
+
+# Convert to short name for prediction
+if [[ "${PREDICTION}" == "eccentricity" ]]; then
+    PRED_SHORT="ecc"
+elif [[ "${PREDICTION}" == "polarAngle" ]]; then
+    PRED_SHORT="PA"
+elif [[ "${PREDICTION}" == "pRFsize" ]]; then
+    PRED_SHORT="size"
+else
+    PRED_SHORT="${PREDICTION}"
+fi
+
+# Determine model name for file matching
+MODEL_NAME="model"
+if [ "$MODEL_TYPE" != "baseline" ]; then
+    MODEL_NAME="$MODEL_TYPE"
+fi
+
+# Create output directories (using absolute paths)
+OUTPUT_DIR_FSLR="$(resolve_abs_path "output_prf_fslr")"
+OUTPUT_DIR_NATIVE="$(resolve_abs_path "output_prf_native")"
+OUTPUT_DIR_RAW="$(resolve_abs_path "output_raw")"
+OUTPUT_DIR_STEP1="$(resolve_abs_path "step1_output")"
+mkdir -p "$OUTPUT_DIR_FSLR"
+mkdir -p "$OUTPUT_DIR_NATIVE"
+mkdir -p "$OUTPUT_DIR_RAW"
+mkdir -p "$OUTPUT_DIR_STEP1"
+
+# Create HCP surface directory if it doesn't exist (using absolute path)
+HCP_SURFACE_DIR_ABS="$(resolve_abs_path "$HCP_SURFACE_DIR")"
+mkdir -p "$HCP_SURFACE_DIR_ABS"
+
+# Check if einops is already installed, install if missing
+echo "Checking for einops package in container..."
+CHECK_CMD="python -c 'import einops; print(\"einops is installed\")' 2>&1"
+singularity exec -e \
+    "$SINGULARITY_IMAGE" \
+    bash -c "$CHECK_CMD" > /dev/null 2>&1
+
+if [ $? -eq 0 ]; then
+    echo "✓ einops is already installed"
+else
+    echo "einops not found. Attempting to install..."
+    INSTALL_CMD="pip install --quiet --no-cache-dir einops 2>&1"
+    INSTALL_OUTPUT=$(singularity exec -e \
+        "$SINGULARITY_IMAGE" \
+        bash -c "$INSTALL_CMD" 2>&1)
+    INSTALL_EXIT=$?
+    
+    if [ $INSTALL_EXIT -eq 0 ]; then
+        echo "✓ einops installed successfully"
+    else
+        echo "Warning: Failed to install einops (network may be unavailable)"
+        echo "  Attempting to continue - einops may already be available in the image"
+        # Try to verify if it's actually available despite install failure
+        VERIFY_CMD="python -c 'import einops' 2>&1"
+        if singularity exec -e "$SINGULARITY_IMAGE" bash -c "$VERIFY_CMD" > /dev/null 2>&1; then
+            echo "✓ einops is actually available (was already installed)"
+        fi
+    fi
+fi
+echo ""
+
+# Download checkpoint zip file before processing hemispheres (if needed)
+# This is done once before the loop to avoid redundant downloads
+echo "==============================================="
+echo "Preparing Checkpoints"
+echo "==============================================="
+
+# Google Drive checkpoint download configuration
+GDRIVE_ZIP_ID="1eshzvbtYbGrdzj6WxYM8ws4CycFZQPOY"
+
+# Read from config.json if not hardcoded above
+if [ -z "$GDRIVE_ZIP_ID" ]; then
+    GDRIVE_ZIP_ID=$(jq -r '.checkpoint_zip_id // empty' config.json 2>/dev/null)
+fi
+
+# Check if any checkpoint files are Git LFS pointers and need downloading
+# We check one checkpoint file to determine if zip download is needed
+CHECKPOINT_NEEDS_DOWNLOAD=false
+for TEST_HEMI in Left Right; do
+    TEST_DIRNAME="Models/checkpoints/${PREDICTION}_${TEST_HEMI}_${MODEL_TYPE}${NO_MYELIN_SUFFIX}"
+    TEST_FILENAME="${PRED_SHORT}_${TEST_HEMI}_${MODEL_TYPE}${NO_MYELIN_SUFFIX}_best_model_epoch*.pt"
+    TEST_CHECKPOINT_SEARCH="${TEST_DIRNAME}/${TEST_FILENAME}"
+    TEST_CHECKPOINT_PATH=$(ls -1 ${TEST_CHECKPOINT_SEARCH} 2>/dev/null | sort -V | tail -n 1)
+    
+    if [ -n "$TEST_CHECKPOINT_PATH" ]; then
+        TEST_CHECKPOINT_PATH_ABS="$(resolve_abs_path "$TEST_CHECKPOINT_PATH")"
+        if [ -f "$TEST_CHECKPOINT_PATH_ABS" ]; then
+            test_file_size=$(stat -f%z "$TEST_CHECKPOINT_PATH_ABS" 2>/dev/null || stat -c%s "$TEST_CHECKPOINT_PATH_ABS" 2>/dev/null || echo "0")
+            if [ "$test_file_size" -lt 1024 ]; then
+                CHECKPOINT_NEEDS_DOWNLOAD=true
+                break
+            fi
+        fi
+    fi
+done
+
+# Download checkpoint zip if needed
+if [ "$CHECKPOINT_NEEDS_DOWNLOAD" = true ] && [ -n "$GDRIVE_ZIP_ID" ]; then
+    ZIP_MARKER="$PROJECT_ROOT/.checkpoints_zip_extracted"
+    if [ ! -f "$ZIP_MARKER" ]; then
+        echo "Checkpoint files are Git LFS pointers. Downloading checkpoint zip from Google Drive..."
+        ZIP_PATH="$PROJECT_ROOT/checkpoints.zip"
+        
+        # Install/check gdown in container
+        echo "Installing/checking gdown in container for Google Drive download..."
+        if ! singularity exec -e "$SINGULARITY_IMAGE" \
+            python -c "import gdown" >/dev/null 2>&1; then
+            echo "Installing gdown in container..."
+            INSTALL_OUTPUT=$(singularity exec -e "$SINGULARITY_IMAGE" \
+                pip install --quiet --no-cache-dir gdown 2>&1)
+            INSTALL_EXIT=$?
+            
+            if [ $INSTALL_EXIT -ne 0 ]; then
+                echo "ERROR: Failed to install gdown in container"
+                echo "Install output: $INSTALL_OUTPUT"
+                echo "Google Drive download requires gdown. Please ensure:"
+                echo "  1. Container has pip available"
+                echo "  2. Network access is enabled"
+                exit 1
+            fi
+            echo "✓ gdown installed successfully in container"
+        else
+            echo "✓ gdown is already available in container"
+        fi
+        
+        echo "Downloading checkpoint zip from Google Drive using gdown..."
+        echo "Google Drive file ID: $GDRIVE_ZIP_ID"
+        echo "Target path: $ZIP_PATH"
+        
+        # Download zip file
+        singularity exec -e "$SINGULARITY_IMAGE" \
+            python -u -m gdown "$GDRIVE_ZIP_ID" -O "$ZIP_PATH" || {
+            echo "ERROR: Failed to download checkpoint zip from Google Drive using gdown"
+            echo "Please verify:"
+            echo "  1. Google Drive file ID is correct: $GDRIVE_ZIP_ID"
+            echo "  2. File is shared with 'Anyone with the link'"
+            echo "  3. Network access is available"
+            exit 1
+        }
+        
+        # Wait for file system sync
+        sleep 1
+        
+        # Verify file was downloaded successfully
+        if [ ! -f "$ZIP_PATH" ]; then
+            echo "ERROR: Downloaded file does not exist at: $ZIP_PATH"
+            exit 1
+        fi
+        
+        FILE_SIZE=$(stat -f%z "$ZIP_PATH" 2>/dev/null || stat -c%s "$ZIP_PATH" 2>/dev/null || echo "0")
+        if [ "$FILE_SIZE" -eq 0 ]; then
+            echo "ERROR: Downloaded file is empty (size: 0 bytes)"
+            exit 1
+        fi
+        
+        echo "✓ Download completed successfully (size: $FILE_SIZE bytes)"
+        
+        # Check if file is actually a ZIP file (check magic bytes)
+        FILE_HEADER=$(head -c 4 "$ZIP_PATH" | od -An -tx1 | tr -d ' \n')
+        if [ "$FILE_HEADER" != "504b0304" ] && [ "$FILE_HEADER" != "504b0506" ] && [ "$FILE_HEADER" != "504b0708" ]; then
+            echo "ERROR: Downloaded file is not a valid ZIP file (header: $FILE_HEADER)"
+            echo "This usually means Google Drive returned a virus scan warning page."
+            echo "File size: $(stat -f%z "$ZIP_PATH" 2>/dev/null || stat -c%s "$ZIP_PATH" 2>/dev/null || echo "unknown") bytes"
+            echo "First 200 bytes of file:"
+            head -c 200 "$ZIP_PATH" | strings | head -5
+            exit 1
+        fi
+        
+        # Extract zip file to Models/checkpoints directory
+        CHECKPOINT_BASE_DIR="$PROJECT_ROOT/Models/checkpoints"
+        mkdir -p "$CHECKPOINT_BASE_DIR"
+        if command -v unzip >/dev/null 2>&1; then
+            # Extract to a temp directory first to handle different zip structures
+            TEMP_EXTRACT="$PROJECT_ROOT/temp_checkpoints_extract"
+            mkdir -p "$TEMP_EXTRACT"
+            unzip -q -o "$ZIP_PATH" -d "$TEMP_EXTRACT" || {
+                echo "ERROR: Failed to extract checkpoint zip file"
+                rm -rf "$TEMP_EXTRACT" "$ZIP_PATH"
+                exit 1
+            }
+            
+            # Move extracted files to correct location
+            if [ -d "$TEMP_EXTRACT/checkpoints" ]; then
+                cp -r "$TEMP_EXTRACT/checkpoints"/* "$CHECKPOINT_BASE_DIR/" 2>/dev/null || true
+            elif [ -d "$TEMP_EXTRACT/Models/checkpoints" ]; then
+                cp -r "$TEMP_EXTRACT/Models/checkpoints"/* "$CHECKPOINT_BASE_DIR/" 2>/dev/null || true
+            else
+                # Files might be at root of zip, find all .pt files and copy to appropriate subdirectories
+                find "$TEMP_EXTRACT" -name "*.pt" -type f | while read -r pt_file; do
+                    rel_path="${pt_file#$TEMP_EXTRACT/}"
+                    target_path="$CHECKPOINT_BASE_DIR/$rel_path"
+                    target_dir=$(dirname "$target_path")
+                    mkdir -p "$target_dir"
+                    cp "$pt_file" "$target_path"
+                done
+            fi
+            
+            # Clean up
+            rm -rf "$TEMP_EXTRACT" "$ZIP_PATH"
+            touch "$ZIP_MARKER"
+            echo "✓ All checkpoints extracted successfully"
+        else
+            echo "ERROR: unzip is not available for extracting checkpoint zip"
+            rm -f "$ZIP_PATH"
+            exit 1
+        fi
+    else
+        echo "Checkpoints zip already extracted (skipping download)"
+    fi
+else
+    echo "Checkpoint files are already available (no download needed)"
+fi
+
+echo ""
+
+# Process both hemispheres
+for HEMISPHERE in lh rh; do
+    echo ""
+    echo "==============================================="
+    echo "Processing Hemisphere: $HEMISPHERE"
+    echo "==============================================="
+    
+    HEMISPHERE_LONG=$(map_hemisphere "$HEMISPHERE")
+    HEMI_CHECK="$HEMISPHERE_LONG"
+    
+    # Find checkpoint based on MODEL_TYPE, PREDICTION, HEMISPHERE, MYELINATION
+    DIRNAME="Models/checkpoints/${PREDICTION}_${HEMI_CHECK}_${MODEL_TYPE}${NO_MYELIN_SUFFIX}"
+    FILENAME="${PRED_SHORT}_${HEMI_CHECK}_${MODEL_TYPE}${NO_MYELIN_SUFFIX}_best_model_epoch*.pt"
+    CHECKPOINT_SEARCH="${DIRNAME}/${FILENAME}"
+    
+    CHECKPOINT_PATH=$(ls -1 ${CHECKPOINT_SEARCH} 2>/dev/null | sort -V | tail -n 1)
+    
+    if [[ -z "$CHECKPOINT_PATH" ]]; then
+        echo "Error: No checkpoint file found with pattern: ${CHECKPOINT_SEARCH}"
+        exit 1
+    fi
+    
+    # Verify checkpoint file exists and is valid (zip should already be downloaded if needed)
+    CHECKPOINT_PATH_ABS="$(resolve_abs_path "$CHECKPOINT_PATH")"
+    if [ ! -f "$CHECKPOINT_PATH_ABS" ]; then
+        echo "ERROR: Checkpoint file not found: $CHECKPOINT_PATH_ABS"
+        echo "Checkpoint should have been downloaded in the preparation step."
+        exit 1
+    fi
+    
+    # Verify checkpoint file size (should be > 1MB, not a Git LFS pointer)
+    file_size=$(stat -f%z "$CHECKPOINT_PATH_ABS" 2>/dev/null || stat -c%s "$CHECKPOINT_PATH_ABS" 2>/dev/null || echo "0")
+    if [ "$file_size" -lt 1024 ]; then
+        echo "ERROR: Checkpoint file is still a Git LFS pointer (size: $file_size bytes)"
+        echo "Checkpoint zip download may have failed or file was not extracted correctly."
+        exit 1
+    fi
+    
+    echo "Using checkpoint: $CHECKPOINT_PATH"
+    
+    # Convert checkpoint path to absolute (if not already done during Google Drive download)
+    if [ -z "$CHECKPOINT_PATH_ABS" ]; then
+        CHECKPOINT_PATH_ABS="$(resolve_abs_path "$CHECKPOINT_PATH")"
+    fi
+    
+    # Determine myelination suffix for filenames
+    if [[ "${MYELINATION,,}" == "true" || "${MYELINATION}" == "True" || "${MYELINATION}" == "1" ]]; then
+        MYELIN_SUFFIX="_myelin"
+    else
+        MYELIN_SUFFIX=""
+    fi
+    
+    # Determine model suffix for filenames
+    if [ "$MODEL_TYPE" != "baseline" ]; then
+        MODEL_SUFFIX="_${MODEL_TYPE}"
+    else
+        MODEL_SUFFIX=""
+    fi
+    
+    # Convert all paths to absolute (no bind mounts needed - Singularity can access host paths directly)
+    # CHECKPOINT_PATH_ABS is already set above if we downloaded from Google Drive
+    PROJECT_ROOT_ABS="$(resolve_abs_path "$PROJECT_ROOT")"
+    FREESURFER_SUBJECTS_DIR_ABS="$(resolve_abs_path "$FREESURFER_SUBJECTS_DIR")"
+    # OUTPUT_DIR_STEP1 is already absolute from above, but ensure it's resolved
+    OUTPUT_DIR_STEP1_ABS="$OUTPUT_DIR_STEP1"
+    
+    # All paths are now absolute - use them directly in container commands
+    # No bind mounts needed - Singularity can access host filesystem directly
+    
+    # Step 1: Native to fsaverage conversion
+    echo ""
+    echo "[Step 1] Native to fsaverage Conversion"
+    echo "==============================================="
+    
+    STEP1_SCRIPT="$PROJECT_ROOT_ABS/run_from_freesurfer/1_native2fsaverage.sh"
+    
+    # Verify script exists before execution
+    if [ ! -f "$STEP1_SCRIPT" ]; then
+        echo "ERROR: Step 1 script not found: $STEP1_SCRIPT"
+        exit 1
+    fi
+    
+    # Build Step 1 command - use absolute paths
+    # IMPORTANT: Execute script directly without bash -c wrapper
+    # This matches the pattern used in other brainlife.io apps
+    # Other apps use: singularity exec -e docker://... ./script.sh
+    # We should use: singularity exec -e IMAGE ./script.sh args...
+    
+    echo "Executing Step 1 command:"
+    echo "  Script: $STEP1_SCRIPT"
+    echo "  Arguments:"
+    echo "    -s $FREESURFER_SUBJECTS_DIR_ABS"
+    echo "    -t $HCP_SURFACE_DIR_ABS"
+    echo "    -h $HEMISPHERE"
+    echo "    -j $N_JOBS"
+    echo "    -i $SUBJECT_ID"
+    echo "    -o $OUTPUT_DIR_STEP1_ABS"
+    echo ""
+    
+    # Execute script directly (like other brainlife.io apps)
+    # Change to project root directory inside container before executing
+    # This ensures relative paths work correctly
+    echo "Running Step 1 (this may take several minutes)..."
+    STEP1_OUTPUT=$(cd "$PROJECT_ROOT_ABS" && singularity exec -e \
+        "$SINGULARITY_IMAGE" \
+        "$STEP1_SCRIPT" \
+        -s "$FREESURFER_SUBJECTS_DIR_ABS" \
+        -t "$HCP_SURFACE_DIR_ABS" \
+        -h "$HEMISPHERE" \
+        -j "$N_JOBS" \
+        -i "$SUBJECT_ID" \
+        -o "$OUTPUT_DIR_STEP1_ABS" 2>&1)
+    
+    STEP1_EXIT=$?
+    
+    # Display Step 1 output - show first 20 lines and last 50 lines
+    echo "--- Step 1 Output (first 20 lines) ---"
+    echo "$STEP1_OUTPUT" | head -20
+    echo "--- Step 1 Output (last 50 lines) ---"
+    echo "$STEP1_OUTPUT" | tail -50
+    echo "--- End of Step 1 Output ---"
+    
+    # Check if Step 1 script actually produced any output
+    if [ -z "$STEP1_OUTPUT" ] || [ -z "$(echo "$STEP1_OUTPUT" | grep -v '^INFO:' | grep -v '^WARNING:' | grep -v 'Using custom Singularity' | grep -v 'Cache:' | grep -v '^\+' | grep -v '^\[.*\]' | grep -v '^echo' | grep -v '^/usr/bin/singularity')" ]; then
+        echo "WARNING: Step 1 script may not have produced any meaningful output!"
+        echo "This could indicate the script did not execute properly."
+    fi
+    
+    if [ $STEP1_EXIT -ne 0 ]; then
+        echo "ERROR: Native to fsaverage conversion failed with exit code $STEP1_EXIT"
+        echo "Full Step 1 output:"
+        echo "$STEP1_OUTPUT"
+        exit 1
+    fi
+    
+    echo ""
+    echo "[Step 1] Completed!"
+    
+    # Debug: Check what files were created after Step 1
+    echo ""
+    echo "Checking generated files after native2fsaverage conversion..."
+    echo "Expected output directory: $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf"
+    
+    # Check if output directory exists
+    if [ ! -d "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID" ]; then
+        echo "WARNING: Subject output directory does not exist: $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID"
+        echo "Listing contents of step1_output:"
+        ls -la "$OUTPUT_DIR_STEP1_ABS/" 2>/dev/null || echo "  (directory does not exist or cannot be accessed)"
+    elif [ ! -d "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf" ]; then
+        echo "WARNING: Surf directory does not exist: $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf"
+        echo "Listing contents of subject directory:"
+        ls -la "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/" 2>/dev/null || echo "  (cannot list directory)"
+    else
+        echo "Found surf directory. Listing generated files:"
+        find "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf" -type f \( -name "*.gii" -o -name "*.mgz" -o -name "*.nii*" \) 2>/dev/null | head -20
+        if [ $? -ne 0 ] || [ -z "$(find "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf" -type f \( -name "*.gii" -o -name "*.mgz" -o -name "*.nii*" \) 2>/dev/null | head -1)" ]; then
+            echo "WARNING: No .gii, .mgz, or .nii files found in surf directory"
+            echo "Listing all files in surf directory:"
+            ls -la "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/surf/" 2>/dev/null || echo "  (cannot list directory)"
+        fi
+    fi
+    
+    # Step 2: Inference
+    echo ""
+    echo "[Step 2] Running Inference"
+    echo "==============================================="
+    
+    # Use Step 1 output directory as freesurfer_dir for Step 2 (to find template files)
+    # Step 2 will save results to output_dir if specified
+    echo "Executing Step 2 command:"
+    echo "  python $PROJECT_ROOT_ABS/run_from_freesurfer/run_inference_freesurfer.py"
+    echo "  Arguments:"
+    echo "    --freesurfer_dir $OUTPUT_DIR_STEP1_ABS"
+    echo "    --checkpoint_path $CHECKPOINT_PATH_ABS"
+    echo "    --model_type $MODEL_TYPE"
+    echo "    --prediction $PREDICTION"
+    echo "    --hemisphere $HEMISPHERE_LONG"
+    echo "    --myelination $MYELINATION"
+    echo "    --subject_id $SUBJECT_ID"
+    echo "    --output_dir $OUTPUT_DIR_STEP1_ABS"
+    echo ""
+    
+    echo "Running Step 2 (inference)..."
+    echo "--- Step 2 Output (real-time) ---"
+    
+    # IMPORTANT: Each singularity exec creates an independent session.
+    # Packages installed in previous sessions are NOT available.
+    # We need to install einops in the SAME session as the Python script execution.
+    # Create a temporary wrapper script to install einops and run Python
+    # This avoids bash -c issues with redirection in brainlife.io's wrapper
+    TEMP_WRAPPER="$PROJECT_ROOT_ABS/run_step2_wrapper.sh"
+    cat > "$TEMP_WRAPPER" << 'WRAPPER_EOF'
+#!/bin/bash
+set -e
+# Install einops if not available (check first to avoid unnecessary install)
+if ! python -c "import einops" 2>/dev/null; then
+    echo "Installing einops..."
+    pip install --quiet --no-cache-dir einops || {
+        echo "Warning: Failed to install einops, but continuing..."
+    }
+fi
+# Run inference script with all arguments passed to this script
+exec python -u "$@"
+WRAPPER_EOF
+    chmod +x "$TEMP_WRAPPER"
+    
+    echo "Installing einops and running inference..."
+    cd "$PROJECT_ROOT_ABS" && singularity exec -e \
+        "$SINGULARITY_IMAGE" \
+        "$TEMP_WRAPPER" \
+        "$PROJECT_ROOT_ABS/run_from_freesurfer/run_inference_freesurfer.py" \
+        --freesurfer_dir "$OUTPUT_DIR_STEP1_ABS" \
+        --checkpoint_path "$CHECKPOINT_PATH_ABS" \
+        --model_type "$MODEL_TYPE" \
+        --prediction "$PREDICTION" \
+        --hemisphere "$HEMISPHERE_LONG" \
+        --myelination "$MYELINATION" \
+        --subject_id "$SUBJECT_ID" \
+        --output_dir "$OUTPUT_DIR_STEP1_ABS" 2>&1
+    
+    STEP2_EXIT=$?
+    
+    # Clean up wrapper script
+    rm -f "$TEMP_WRAPPER"
+    
+    echo "--- End of Step 2 Output ---"
+    
+    if [ $STEP2_EXIT -ne 0 ]; then
+        echo "ERROR: Inference failed with exit code $STEP2_EXIT"
+        exit 1
+    fi
+    
+    echo "[Step 2] Completed!"
+    
+    # Debug: Check what files were created after Step 2
+    echo ""
+    echo "Checking generated files after inference..."
+    echo "Expected output directory: $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy"
+    
+    if [ -d "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy" ]; then
+        echo "Found deepRetinotopy directory. Listing files:"
+        ls -lah "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy/" 2>/dev/null || echo "  (directory exists but listing failed)"
+        echo ""
+        echo "Searching for prediction files:"
+        find "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy" -name "*.func.gii" -type f 2>/dev/null | head -20
+    else
+        echo "WARNING: Directory $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy does not exist"
+        echo "Listing contents of subject directory:"
+        ls -la "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/" 2>/dev/null || echo "  (cannot list directory)"
+        echo ""
+        echo "Searching for any generated .func.gii files in step1_output:"
+        find "$OUTPUT_DIR_STEP1_ABS" -name "*.func.gii" -type f 2>/dev/null | head -20
+    fi
+    
+    # Step 3: Fsaverage to native conversion
+    echo ""
+    echo "[Step 3] Fsaverage to Native Space Conversion"
+    echo "==============================================="
+    
+    # Step 3 needs to read from Step 1 output (surf files) and Step 2 output (prediction files)
+    # Use step1_output as freesurfer_dir and specify output_dir to save results there
+    STEP3_SCRIPT="$PROJECT_ROOT_ABS/run_from_freesurfer/2_fsaverage2native.sh"
+    
+    # Verify script exists before execution
+    if [ ! -f "$STEP3_SCRIPT" ]; then
+        echo "ERROR: Step 3 script not found: $STEP3_SCRIPT"
+        exit 1
+    fi
+    
+    echo "Executing Step 3 command:"
+    echo "  Script: $STEP3_SCRIPT"
+    echo "  Arguments:"
+    echo "    -s $OUTPUT_DIR_STEP1_ABS"
+    echo "    -t $HCP_SURFACE_DIR_ABS"
+    echo "    -h $HEMISPHERE"
+    echo "    -r $PREDICTION"
+    echo "    -m $MODEL_TYPE"
+    echo "    -y $MYELINATION"
+    echo "    -j $N_JOBS"
+    echo "    -i $SUBJECT_ID"
+    echo "    -o $OUTPUT_DIR_STEP1_ABS"
+    echo ""
+    
+    echo "Running Step 3 (fsaverage to native conversion)..."
+    STEP3_OUTPUT=$(cd "$PROJECT_ROOT_ABS" && singularity exec -e \
+        "$SINGULARITY_IMAGE" \
+        "$STEP3_SCRIPT" \
+        -s "$OUTPUT_DIR_STEP1_ABS" \
+        -t "$HCP_SURFACE_DIR_ABS" \
+        -h "$HEMISPHERE" \
+        -r "$PREDICTION" \
+        -m "$MODEL_TYPE" \
+        -y "$MYELINATION" \
+        -j "$N_JOBS" \
+        -i "$SUBJECT_ID" \
+        -o "$OUTPUT_DIR_STEP1_ABS" 2>&1)
+    
+    STEP3_EXIT=$?
+    
+    # Display Step 3 output (last 50 lines to avoid overwhelming output)
+    echo "--- Step 3 Output (last 50 lines) ---"
+    echo "$STEP3_OUTPUT" | tail -50
+    echo "--- End of Step 3 Output ---"
+    
+    if [ $STEP3_EXIT -ne 0 ]; then
+        echo "ERROR: Fsaverage to native conversion failed with exit code $STEP3_EXIT"
+        echo "Full Step 3 output:"
+        echo "$STEP3_OUTPUT"
+        exit 1
+    fi
+    
+    echo "[Step 3] Completed!"
+    
+    # Debug: Check what files were created after Step 3
+    echo ""
+    echo "Checking generated files after native space conversion..."
+    echo "Expected output directory: $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy"
+    
+    if [ -d "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy" ]; then
+        echo "Found deepRetinotopy directory. Listing files:"
+        ls -lah "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy/" 2>/dev/null || echo "  (directory exists but listing failed)"
+        echo ""
+        echo "Searching for native space prediction files:"
+        find "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy" -name "*native*.func.gii" -type f 2>/dev/null | head -20
+    else
+        echo "WARNING: Directory $OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy does not exist"
+        echo "Listing contents of subject directory:"
+        ls -la "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/" 2>/dev/null || echo "  (cannot list directory)"
+    fi
+    
+    # Find and copy output files to new directories with renamed files
+    # Find and copy final output files before moving intermediate files
+    # Find fsaverage space output file (from Step 2)
+    FSLR_OUTPUT_PATTERN="${SUBJECT_ID}.predicted_${PREDICTION}_${HEMISPHERE}${MYELIN_SUFFIX}${MODEL_SUFFIX}.func.gii"
+    FSLR_OUTPUT_FILE="$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy/$FSLR_OUTPUT_PATTERN"
+    
+    if [ -f "$FSLR_OUTPUT_FILE" ]; then
+        # Copy to output_prf_fslr with renamed file
+        if [ "$HEMISPHERE" == "lh" ]; then
+            cp "$FSLR_OUTPUT_FILE" "$OUTPUT_DIR_FSLR/left.gii"
+            echo "Copied fsaverage space file to $OUTPUT_DIR_FSLR/left.gii"
+        else
+            cp "$FSLR_OUTPUT_FILE" "$OUTPUT_DIR_FSLR/right.gii"
+            echo "Copied fsaverage space file to $OUTPUT_DIR_FSLR/right.gii"
+        fi
+    else
+        echo "WARNING: Could not find exact match: $FSLR_OUTPUT_FILE"
+        # Try to find any matching file with flexible pattern
+        echo "Searching for alternative patterns..."
+        FSLR_FOUND=$(find "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy" -name "*predicted*${PREDICTION}*${HEMISPHERE}*.func.gii" -type f 2>/dev/null | grep -v "native" | head -1)
+        if [ -n "$FSLR_FOUND" ] && [ -f "$FSLR_FOUND" ]; then
+            echo "Found alternative file: $FSLR_FOUND"
+            if [ "$HEMISPHERE" == "lh" ]; then
+                cp "$FSLR_FOUND" "$OUTPUT_DIR_FSLR/left.gii"
+                echo "Copied fsaverage space file to $OUTPUT_DIR_FSLR/left.gii"
+            else
+                cp "$FSLR_FOUND" "$OUTPUT_DIR_FSLR/right.gii"
+                echo "Copied fsaverage space file to $OUTPUT_DIR_FSLR/right.gii"
+            fi
+        else
+            echo "ERROR: Could not find fsaverage space output file for $HEMISPHERE"
+        fi
+    fi
+    
+    # Find native space output file (from Step 3)
+    NATIVE_OUTPUT_PATTERN="${SUBJECT_ID}.predicted_${PREDICTION}_${MODEL_NAME}.${HEMISPHERE}.native.func.gii"
+    NATIVE_OUTPUT_FILE="$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy/$NATIVE_OUTPUT_PATTERN"
+    
+    if [ -f "$NATIVE_OUTPUT_FILE" ]; then
+        # Copy to output_prf_native with renamed file
+        if [ "$HEMISPHERE" == "lh" ]; then
+            cp "$NATIVE_OUTPUT_FILE" "$OUTPUT_DIR_NATIVE/left.gii"
+            echo "Copied native space file to $OUTPUT_DIR_NATIVE/left.gii"
+        else
+            cp "$NATIVE_OUTPUT_FILE" "$OUTPUT_DIR_NATIVE/right.gii"
+            echo "Copied native space file to $OUTPUT_DIR_NATIVE/right.gii"
+        fi
+    else
+        echo "WARNING: Could not find exact match: $NATIVE_OUTPUT_FILE"
+        # Try to find any matching file with flexible pattern
+        echo "Searching for alternative patterns..."
+        NATIVE_FOUND=$(find "$OUTPUT_DIR_STEP1_ABS/$SUBJECT_ID/deepRetinotopy" -name "*predicted*${PREDICTION}*${HEMISPHERE}*native*.func.gii" -type f 2>/dev/null | head -1)
+        if [ -n "$NATIVE_FOUND" ] && [ -f "$NATIVE_FOUND" ]; then
+            echo "Found alternative file: $NATIVE_FOUND"
+            if [ "$HEMISPHERE" == "lh" ]; then
+                cp "$NATIVE_FOUND" "$OUTPUT_DIR_NATIVE/left.gii"
+                echo "Copied native space file to $OUTPUT_DIR_NATIVE/left.gii"
+            else
+                cp "$NATIVE_FOUND" "$OUTPUT_DIR_NATIVE/right.gii"
+                echo "Copied native space file to $OUTPUT_DIR_NATIVE/right.gii"
+            fi
+        else
+            echo "ERROR: Could not find native space output file for $HEMISPHERE"
+        fi
+    fi
+    
+    echo "Hemisphere $HEMISPHERE processing completed!"
+done
+
+# After processing both hemispheres, move all intermediate files to output_raw
+echo ""
+echo "Moving all intermediate files to $OUTPUT_DIR_RAW..."
+# OUTPUT_DIR_STEP1 is already absolute path
+if [ -d "$OUTPUT_DIR_STEP1/$SUBJECT_ID" ]; then
+    # Move entire subject directory structure to output_raw
+    RAW_SUBJECT_DIR="$OUTPUT_DIR_RAW/$SUBJECT_ID"
+    mkdir -p "$RAW_SUBJECT_DIR"
+    
+    # Move all files and directories from step1_output to output_raw
+    if [ "$(ls -A "$OUTPUT_DIR_STEP1/$SUBJECT_ID" 2>/dev/null)" ]; then
+        # Use rsync or cp+rm to preserve directory structure
+        cp -r "$OUTPUT_DIR_STEP1/$SUBJECT_ID"/* "$RAW_SUBJECT_DIR/" 2>/dev/null || true
+        # Remove the original directory after successful copy
+        rm -rf "$OUTPUT_DIR_STEP1/$SUBJECT_ID" 2>/dev/null || true
+        echo "All intermediate files moved to $RAW_SUBJECT_DIR"
+    else
+        rmdir "$OUTPUT_DIR_STEP1/$SUBJECT_ID" 2>/dev/null || true
+    fi
+fi
+
+echo ""
+echo "==============================================="
+echo "Full Pipeline Completed!"
+echo "==============================================="
+
+# Verify output files were created
+echo ""
+echo "Verifying output files..."
+FSLR_LEFT="$OUTPUT_DIR_FSLR/left.gii"
+FSLR_RIGHT="$OUTPUT_DIR_FSLR/right.gii"
+NATIVE_LEFT="$OUTPUT_DIR_NATIVE/left.gii"
+NATIVE_RIGHT="$OUTPUT_DIR_NATIVE/right.gii"
+
+SUCCESS=true
+echo "FSLR space outputs:"
+if [ -f "$FSLR_LEFT" ]; then
+    echo "  ✓ left.gii ($(du -h "$FSLR_LEFT" | cut -f1))"
+else
+    echo "  ✗ left.gii (MISSING)"
+    SUCCESS=false
+fi
+if [ -f "$FSLR_RIGHT" ]; then
+    echo "  ✓ right.gii ($(du -h "$FSLR_RIGHT" | cut -f1))"
+else
+    echo "  ✗ right.gii (MISSING)"
+    SUCCESS=false
+fi
+
+echo "Native space outputs:"
+if [ -f "$NATIVE_LEFT" ]; then
+    echo "  ✓ left.gii ($(du -h "$NATIVE_LEFT" | cut -f1))"
+else
+    echo "  ✗ left.gii (MISSING)"
+    SUCCESS=false
+fi
+if [ -f "$NATIVE_RIGHT" ]; then
+    echo "  ✓ right.gii ($(du -h "$NATIVE_RIGHT" | cut -f1))"
+else
+    echo "  ✗ right.gii (MISSING)"
+    SUCCESS=false
+fi
+
+echo ""
+if [ "$SUCCESS" = true ]; then
+    echo "Status: SUCCESS - All output files generated"
+else
+    echo "Status: INCOMPLETE - Some output files are missing"
+    echo ""
+    echo "Debugging: Listing all .gii files in output directories..."
+    find "$OUTPUT_DIR_FSLR" "$OUTPUT_DIR_NATIVE" -name "*.gii" -type f 2>/dev/null
+    exit 1
+fi
+
+echo ""
+echo "Results are available in:"
+echo "  - FSLR space: $OUTPUT_DIR_FSLR/"
+echo "  - Native space: $OUTPUT_DIR_NATIVE/"
+echo "  - Intermediate files: $OUTPUT_DIR_RAW/"

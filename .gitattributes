@@ -1,3 +1,7 @@
 ./Manuscript/* linguist-language=Python
 ./Models/* linguist-language=Python
 ./Retinotopy/* linguist-language=Python
+
+# Git LFS tracking for large checkpoint files
+*.pt filter=lfs diff=lfs merge=lfs -text
+Models/checkpoints/** filter=lfs diff=lfs merge=lfs -text

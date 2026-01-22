@@ -153,19 +153,24 @@ Retinotopy/data/processed_old2/
 Retinotopy/data/processed_orig/
 Models/wandb/
 Models/output_*
+# Models/checkpoints/ - Now tracked with Git LFS
+eccentricity_*_noMyelin/
 
 # Large data files (should be downloaded separately)
 *.dscalar.nii
-*.surf.gii
+#*.surf.gii
 *.nii
 *.nii.gz
 *.mgz
+*.pt
 
 # Large data files
 *.mat
-Retinotopy/data/raw/converted/
+!Retinotopy/data/raw/converted/*.mat
 Retinotopy/data/raw/surfaces/
-
+Retinotopy/data/processed/
+# Specifically ignore .pt files in processed directory
+Retinotopy/data/processed/*.pt
 # Large notebooks (with outputs)
 visualize_output_pRF.ipynb
 analyze_cifti_and_mat.ipynb
