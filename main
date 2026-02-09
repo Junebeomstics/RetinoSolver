@@ -25,6 +25,7 @@ FREESURFER_DIR=$(jq -r '.freesurfer' config.json)
 MODEL_TYPE=$(jq -r '.model_type' config.json)
 PREDICTION=$(jq -r '.prediction_target' config.json)
 MYELINATION=$(jq -r '.myelination' config.json)
+CALCULATE_CURV_USING_WB=$(jq -r '.calculate_curv_using_wb // "no"' config.json)
 
 # Validate required parameters
 if [ -z "$FREESURFER_DIR" ] || [ "$FREESURFER_DIR" == "null" ]; then
@@ -515,6 +516,7 @@ for HEMISPHERE in lh rh; do
     echo "    -j $N_JOBS"
     echo "    -i $SUBJECT_ID"
     echo "    -o $OUTPUT_DIR_STEP1_ABS"
+    echo "    -w $CALCULATE_CURV_USING_WB"
     echo ""
     
     # Execute script directly (like other brainlife.io apps)
@@ -529,7 +531,8 @@ for HEMISPHERE in lh rh; do
         -h "$HEMISPHERE" \
         -j "$N_JOBS" \
         -i "$SUBJECT_ID" \
-        -o "$OUTPUT_DIR_STEP1_ABS" 2>&1)
+        -o "$OUTPUT_DIR_STEP1_ABS" \
+        -w "$CALCULATE_CURV_USING_WB" 2>&1)
     
     STEP1_EXIT=$?
     

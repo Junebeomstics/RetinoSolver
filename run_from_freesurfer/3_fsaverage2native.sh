@@ -17,11 +17,12 @@ hemisphere=""
 prediction=""
 model_type="baseline"
 myelination="False"
+seed=""
 
 # Get the directory of the current script
 script_dir=$(dirname "$(realpath "$0")")
 
-while getopts s:h:t:r:m:j:i:o:y: flag
+while getopts s:h:t:r:m:j:i:o:y:e: flag
 do
   case "${flag}" in
     s) freesurfer_dir=${OPTARG};;
@@ -41,8 +42,9 @@ do
     i) subject_id=${OPTARG};;
     o) output_dir=${OPTARG};;
     y) myelination=${OPTARG};;
+    e) seed=${OPTARG};;
     ?)
-      echo "script usage: $(basename "$0") [-s path to freesurfer dir] [-t path to HCP surfaces] [-h hemisphere] [-r prediction] [-m model_type] [-j number of cores] [-i subject ID] [-o output directory] [-y myelination]" >&2
+      echo "script usage: $(basename "$0") [-s path to freesurfer dir] [-t path to HCP surfaces] [-h hemisphere] [-r prediction] [-m model_type] [-j number of cores] [-i subject ID] [-o output directory] [-y myelination] [-e seed]" >&2
       exit 1;;
   esac
 done
@@ -87,6 +89,7 @@ process_subject_step2() {
     local script_dir=$7
     local output_dir=$8
     local myelination=$9
+    local seed=${10}
     
     echo "=== Processing Step 2 (fsaverage2native) for subject: $dirSub ==="
     
@@ -108,9 +111,19 @@ process_subject_step2() {
             MODEL_SUFFIX="_$model_type"
         fi
         
-        local input_prediction_file="$deepret_output_dir/$dirSub.predicted_${prediction}_${hemisphere}${MYELIN_SUFFIX}${MODEL_SUFFIX}.func.gii"
+        # Try seed subfolder first if seed is provided
+        if [ -n "$seed" ]; then
+            local input_prediction_file="$deepret_output_dir/seed${seed}/$dirSub.predicted_${prediction}_${hemisphere}${MYELIN_SUFFIX}${MODEL_SUFFIX}.func.gii"
+        else
+            local input_prediction_file="$deepret_output_dir/$dirSub.predicted_${prediction}_${hemisphere}${MYELIN_SUFFIX}${MODEL_SUFFIX}.func.gii"
+        fi
         
         # Fallback to original location if not in custom output
+        if [ ! -f "$input_prediction_file" ] && [ -n "$seed" ]; then
+            input_prediction_file="$dirSubs/$dirSub/deepRetinotopy/seed${seed}/$dirSub.predicted_${prediction}_${hemisphere}${MYELIN_SUFFIX}${MODEL_SUFFIX}.func.gii"
+        fi
+        
+        # Final fallback without seed folder
         if [ ! -f "$input_prediction_file" ]; then
             input_prediction_file="$dirSubs/$dirSub/deepRetinotopy/$dirSub.predicted_${prediction}_${hemisphere}${MYELIN_SUFFIX}${MODEL_SUFFIX}.func.gii"
         fi
@@ -144,7 +157,17 @@ process_subject_step2() {
             MODEL_SUFFIX="_$model_type"
         fi
         
-        local input_prediction_file="$deepret_output_dir/$dirSub.predicted_${prediction}_${hemisphere}${MYELIN_SUFFIX}${MODEL_SUFFIX}.func.gii"
+        # Try seed subfolder first if seed is provided
+        if [ -n "$seed" ]; then
+            local input_prediction_file="$deepret_output_dir/seed${seed}/$dirSub.predicted_${prediction}_${hemisphere}${MYELIN_SUFFIX}${MODEL_SUFFIX}.func.gii"
+        else
+            local input_prediction_file="$deepret_output_dir/$dirSub.predicted_${prediction}_${hemisphere}${MYELIN_SUFFIX}${MODEL_SUFFIX}.func.gii"
+        fi
+        
+        # Fallback without seed folder if file not found
+        if [ ! -f "$input_prediction_file" ]; then
+            input_prediction_file="$deepret_output_dir/$dirSub.predicted_${prediction}_${hemisphere}${MYELIN_SUFFIX}${MODEL_SUFFIX}.func.gii"
+        fi
         local surf_midthickness_32k="$dirSubs/$dirSub/surf/$dirSub.$hemisphere.midthickness.32k_fs_LR.surf.gii"
         local surf_midthickness_native="$dirSubs/$dirSub/surf/$hemisphere.midthickness.surf.gii"
         local surf_sphere_reg="$dirSubs/$dirSub/surf/$hemisphere.sphere.reg.surf.gii"
@@ -219,7 +242,11 @@ process_subject_step2() {
     
     # Resample predicted map from fsaverage to native space
     echo "[$dirSub] Resampling predicted map from fsaverage to native space..."
-    local output_native="$deepret_output_dir/$dirSub.predicted_${prediction}_${model_name}.$hemisphere.native.func.gii"
+    if [ -n "$seed" ]; then
+        local output_native="$deepret_output_dir/seed${seed}/$dirSub.predicted_${prediction}_${model_name}.$hemisphere.native.func.gii"
+    else
+        local output_native="$deepret_output_dir/$dirSub.predicted_${prediction}_${model_name}.$hemisphere.native.func.gii"
+    fi
     
     wb_command -metric-resample "$input_prediction_file" \
         "$hcp_sphere" \
@@ -306,7 +333,7 @@ if [ -n "$subject_id" ]; then
     fi
     
     echo "Processing subject: $subject_id"
-    process_subject_step2 "$subject_id" "$hemisphere" "$prediction" "$MODEL_NAME" "$freesurfer_dir" "$hcp_surface_dir" "$script_dir" "$output_dir" "$myelination"
+    process_subject_step2 "$subject_id" "$hemisphere" "$prediction" "$MODEL_NAME" "$freesurfer_dir" "$hcp_surface_dir" "$script_dir" "$output_dir" "$myelination" "$seed"
     
     if [ $? -ne 0 ]; then
         exit 1
@@ -314,7 +341,7 @@ if [ -n "$subject_id" ]; then
 else
     # Multiple subjects processing
     export -f process_subject_step2
-    export hemisphere prediction MODEL_NAME freesurfer_dir hcp_surface_dir script_dir output_dir myelination model_type
+    export hemisphere prediction MODEL_NAME freesurfer_dir hcp_surface_dir script_dir output_dir myelination model_type seed
     
     cd "$freesurfer_dir"
     
@@ -334,7 +361,7 @@ else
     echo "Found ${#subjects[@]} subjects to process: ${subjects[*]}"
     
     # Process in parallel
-    printf '%s\n' "${subjects[@]}" | xargs -I {} -P $n_jobs bash -c "process_subject_step2 '{}' '$hemisphere' '$prediction' '$MODEL_NAME' '$freesurfer_dir' '$hcp_surface_dir' '$script_dir' '$output_dir' '$myelination'"
+    printf '%s\n' "${subjects[@]}" | xargs -I {} -P $n_jobs bash -c "process_subject_step2 '{}' '$hemisphere' '$prediction' '$MODEL_NAME' '$freesurfer_dir' '$hcp_surface_dir' '$script_dir' '$output_dir' '$myelination' '$seed'"
 fi
 
 # Calculate and display total time

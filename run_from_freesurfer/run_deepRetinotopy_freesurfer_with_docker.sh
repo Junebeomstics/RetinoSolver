@@ -2,6 +2,63 @@
 
 # Script to run FreeSurfer preprocessing and inference pipeline using Docker container
 # This script sets up Docker environment and runs the full pipeline for FreeSurfer subjects
+#
+# USAGE EXAMPLES:
+#
+# 1. Basic usage with default settings (single subject):
+#    ./run_deepRetinotopy_freesurfer_with_docker.sh \
+#        --freesurfer_dir /path/to/freesurfer/subjects \
+#        --hemisphere lh \
+#        --checkpoint_path /path/to/checkpoint.pt \
+#        --hcp_surface_dir /path/to/surface
+#
+# 2. Process specific subject with custom model:
+#    ./run_deepRetinotopy_freesurfer_with_docker.sh \
+#        --freesurfer_dir /mnt/storage/junb/proj-5dceb267c4ae281d2c297b92/ \
+#        --subject_id sub-191033 \
+#        --hemisphere lh \
+#        --model_type transolver_optionC \
+#        --prediction eccentricity \
+#        --checkpoint_path Models/checkpoints/eccentricity_Left_transolver_optionC/best_model.pt \
+#        --hcp_surface_dir surface \
+#        --myelination False \
+#        --seed 0
+#
+# 3. Process all subjects in directory with custom output:
+#    ./run_deepRetinotopy_freesurfer_with_docker.sh \
+#        --freesurfer_dir /path/to/freesurfer/subjects \
+#        --hemisphere rh \
+#        --checkpoint_path /path/to/checkpoint.pt \
+#        --hcp_surface_dir /path/to/surface \
+#        --output_dir /path/to/output \
+#        --model_type baseline \
+#        --prediction polarAngle
+#
+# 4. Skip preprocessing (already done) and use wb_command for curvature:
+#    ./run_deepRetinotopy_freesurfer_with_docker.sh \
+#        --freesurfer_dir /path/to/freesurfer/subjects \
+#        --hemisphere lh \
+#        --checkpoint_path /path/to/checkpoint.pt \
+#        --hcp_surface_dir /path/to/surface \
+#        --skip_preprocessing \
+#        --calculate_curv_using_wb yes
+#
+# 5. Fast mode with custom Docker image:
+#    ./run_deepRetinotopy_freesurfer_with_docker.sh \
+#        --freesurfer_dir /path/to/freesurfer/subjects \
+#        --hemisphere lh \
+#        --checkpoint_path /path/to/checkpoint.pt \
+#        --hcp_surface_dir /path/to/surface \
+#        --fast yes \
+#        --docker_image custom_image:tag
+#
+# NOTES:
+# - If --freesurfer_dir is not specified, default is used: /mnt/storage/junb/proj-5dceb267c4ae281d2c297b92/
+# - If --subject_id is provided, the script will automatically search for dt-neuro-freesurfer.* 
+#   subdirectory within $FREESURFER_DIR/$SUBJECT_ID/ and use it if found
+# - If --output_dir is not specified, results are saved in-place within FreeSurfer directory structure
+# - The script processes three steps: (1) native to fsaverage, (2) inference, (3) fsaverage to native
+# - Use --skip_preprocessing or --skip_native_conversion to skip specific steps if already done
 
 # Set base directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,66 +67,21 @@ cd "$PROJECT_ROOT"
 
 # Docker settings
 DOCKER_IMAGE=${DOCKER_IMAGE:-"vnmd/deepretinotopy_1.0.18:latest"}  # Change to your Docker image name
-CONTAINER_NAME="deepretinotopy_pipeline"
+CONTAINER_NAME="deepretinotopy_pipeline_all_subjects"
 USE_GPU=${USE_GPU:-"true"}  # Set to "false" to disable GPU
 
 # Default parameters
 
-SUBJECT_ID=""
-SUBJECT_ID="sub-100206"
-FREESURFER_SUBDIR=$(find ./HCP_freesurfer/proj-5dceb267c4ae281d2c297b92/$SUBJECT_ID/ -maxdepth 1 -type d -name "dt-neuro-freesurfer.*" | head -n1)
-if [[ -z "$FREESURFER_SUBDIR" ]]; then
-    echo "Error: No FreeSurfer directory found for subject $SUBJECT_ID"
-    exit 1
-fi
-FREESURFER_DIR="$FREESURFER_SUBDIR"
+SUBJECT_ID="sub-191033" #"sub-157336"
+# Default FreeSurfer subjects directory (base directory containing all subjects)
+FREESURFER_DIR="/mnt/storage/junb/proj-5dceb267c4ae281d2c297b92/"
 
-HEMISPHERE="lh"
-MODEL_TYPE="baseline"
-PREDICTION="eccentricity" #"polarAngle" #  "pRFsize" "eccentricity"
+HEMISPHERE="rh"
+MODEL_TYPE="baseline" # "baseline" "transolver_optionA" "transolver_optionB" "transolver_optionC"
+PREDICTION="polarAngle" # "eccentricity"  "pRFsize" "eccentricity"
 MYELINATION="False"
-# Automatically find checkpoint based on MODEL_TYPE, PREDICTION, HEMISPHERE, MYELINATION
-
-# First, map HEMISPHERE to the correct name for checkpoint search
-if [[ "${HEMISPHERE,,}" == "lh" ]]; then
-    HEMI_CHECK="Left"
-elif [[ "${HEMISPHERE,,}" == "rh" ]]; then
-    HEMI_CHECK="Right"
-else
-    HEMI_CHECK="${HEMISPHERE}"
-fi
-
-# Compose directory and filename patterns
-if [[ "${MYELINATION,,}" == "true" || "${MYELINATION}" == "True" || "${MYELINATION}" == "1" ]]; then
-    NO_MYELIN_SUFFIX=""
-else
-    NO_MYELIN_SUFFIX="_noMyelin"
-fi
-
-# Convert to short name for prediction if needed
-if [[ "${PREDICTION}" == "eccentricity" ]]; then
-    PRED_SHORT="ecc"
-elif [[ "${PREDICTION}" == "polarAngle" ]]; then
-    PRED_SHORT="PA"
-elif [[ "${PREDICTION}" == "pRFsize" ]]; then
-    PRED_SHORT="size"
-else
-    PRED_SHORT="${PREDICTION}"
-fi
-
-# Compose possible checkpoint search pattern
-DIRNAME="Models/output_wandb/${PREDICTION}_${HEMI_CHECK}_${MODEL_TYPE}${NO_MYELIN_SUFFIX}"
-FILENAME="${PRED_SHORT}_${HEMI_CHECK}_${MODEL_TYPE}${NO_MYELIN_SUFFIX}_best_model_epoch*.pt"
-
-CHECKPOINT_SEARCH="${DIRNAME}/${FILENAME}"
-
-# Find the latest matching checkpoint file if exists
-CHECKPOINT_PATH=$(ls -1 ${CHECKPOINT_SEARCH} 2>/dev/null | sort -V | tail -n 1)
-
-if [[ -z "$CHECKPOINT_PATH" ]]; then
-    echo "Error: No checkpoint file found with pattern: ${CHECKPOINT_SEARCH}"
-    exit 1
-fi
+SEED="0"  # Seed name (optional, will be added to checkpoint folder name if provided)
+CHECKPOINT_PATH=""  # Will be set automatically or via --checkpoint_path argument
 HCP_SURFACE_DIR="surface"
 T1_PATH=""
 T2_PATH=""
@@ -77,6 +89,9 @@ OUTPUT_DIR=""
 SKIP_MYELIN=false
 SKIP_PREPROCESSING=false
 SKIP_NATIVE_CONVERSION=false
+FORCE_RECREATE_CONTAINER=false
+FAST_MODE="no"  # "yes" or "no" - fast mode for midthickness surface generation
+CALCULATE_CURV_USING_WB="no"  # "yes" or "no" - use wb_command for curvature calculation
 N_JOBS=$(($(nproc) - 1))
 [ $N_JOBS -lt 1 ] && N_JOBS=1
 
@@ -113,6 +128,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --myelination)
             MYELINATION="$2"
+            shift 2
+            ;;
+        --seed)
+            SEED="$2"
             shift 2
             ;;
         --hcp_surface_dir)
@@ -159,11 +178,32 @@ while [[ $# -gt 0 ]]; do
             WANDB_API_KEY="$2"
             shift 2
             ;;
+        --force_recreate_container)
+            FORCE_RECREATE_CONTAINER=true
+            shift
+            ;;
+        --fast)
+            FAST_MODE="$2"
+            case "$FAST_MODE" in
+                'yes'|'no') ;;
+                *) echo "Invalid fast mode argument: $FAST_MODE. Must be 'yes' or 'no'"; exit 1;;
+            esac
+            shift 2
+            ;;
+        --calculate_curv_using_wb)
+            CALCULATE_CURV_USING_WB="$2"
+            case "$CALCULATE_CURV_USING_WB" in
+                'yes'|'no') ;;
+                *) echo "Invalid calculate_curv_using_wb argument: $CALCULATE_CURV_USING_WB. Must be 'yes' or 'no'"; exit 1;;
+            esac
+            shift 2
+            ;;
         --help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Required options:"
-            echo "  --freesurfer_dir PATH       Path to FreeSurfer subjects directory"
+            echo "  --freesurfer_dir PATH       Path to FreeSurfer subjects directory (base directory containing all subjects)"
+            echo "                             Default: /mnt/storage/junb/proj-5dceb267c4ae281d2c297b92/"
             echo "  --hemisphere lh|rh         Hemisphere to process"
             echo "  --checkpoint_path PATH     Path to pre-trained model checkpoint"
             echo "  --hcp_surface_dir PATH     Path to HCP surface templates (if not skipping preprocessing)"
@@ -173,16 +213,22 @@ while [[ $# -gt 0 ]]; do
             echo "  --model_type TYPE          Model type: baseline, transolver_optionA, transolver_optionB, transolver_optionC (default: baseline)"
             echo "  --prediction TYPE          Prediction type: eccentricity, polarAngle, pRFsize (default: eccentricity)"
             echo "  --myelination True|False   Whether myelination was used during training (default: True)"
+            echo "  --seed SEED                Seed name to add to checkpoint folder name (optional, e.g., 0, 1, 2)"
             echo "  --t1_path PATH            Path to T1 image (required for myelin generation)"
             echo "  --t2_path PATH            Path to T2 image (required for myelin generation)"
             echo "  --output_dir PATH         Output directory (default: in-place)"
             echo "  --skip_myelin             Skip myelin map generation step"
             echo "  --skip_preprocessing       Skip preprocessing steps (assume already done)"
             echo "  --skip_native_conversion  Skip fsaverage to native space conversion"
+            echo "  --fast yes|no             Fast mode for midthickness surface generation (default: no)"
+            echo "                             When 'yes', uses Python script instead of mris_expand, output files have '_fast' suffix"
+            echo "  --calculate_curv_using_wb yes|no  Use wb_command for curvature calculation (default: no)"
+            echo "                             When 'yes', uses wb_command -surface-curvature instead of mris_curvature"
             echo "  --n_jobs N                Number of parallel jobs (default: auto-detect)"
             echo "  --docker_image IMAGE      Docker image to use (default: vnmd/deepretinotopy_1.0.18:latest)"
             echo "  --use_wandb True|False    Enable Wandb logging (default: false)"
             echo "  --wandb_api_key KEY       Wandb API key"
+            echo "  --force_recreate_container Force recreation of Docker container (useful when mounts change)"
             echo ""
             exit 0
             ;;
@@ -200,14 +246,89 @@ if [ -z "$FREESURFER_DIR" ]; then
     exit 1
 fi
 
+# Validate FreeSurfer directory exists
+if [ ! -d "$FREESURFER_DIR" ]; then
+    echo "ERROR: FreeSurfer directory not found: $FREESURFER_DIR"
+    exit 1
+fi
+
+# If SUBJECT_ID is provided, find dt-neuro-freesurfer.* subdirectory and update FREESURFER_DIR
+if [ ! -z "$SUBJECT_ID" ]; then
+    SUBJECT_DIR="$FREESURFER_DIR/$SUBJECT_ID"
+    if [ ! -d "$SUBJECT_DIR" ]; then
+        echo "WARNING: Subject directory not found: $SUBJECT_DIR"
+        echo "Continuing anyway (will process all subjects in $FREESURFER_DIR)"
+    else
+        # Look for dt-neuro-freesurfer.* subdirectory within subject directory
+        FREESURFER_SUBDIR=$(find "$SUBJECT_DIR/" -maxdepth 1 -type d -name "dt-neuro-freesurfer.*" | head -n1)
+        if [ ! -z "$FREESURFER_SUBDIR" ]; then
+            echo "INFO: Found FreeSurfer subdirectory: $FREESURFER_SUBDIR"
+            FREESURFER_DIR="$FREESURFER_SUBDIR"
+        else
+            echo "INFO: No dt-neuro-freesurfer.* subdirectory found in $SUBJECT_DIR"
+            echo "INFO: Using subject directory directly: $SUBJECT_DIR"
+            FREESURFER_DIR="$SUBJECT_DIR"
+        fi
+    fi
+fi
+
 if [ -z "$HEMISPHERE" ]; then
     echo "ERROR: --hemisphere is required (must be 'lh' or 'rh')"
     exit 1
 fi
 
+# Automatically find checkpoint if not provided via --checkpoint_path
 if [ -z "$CHECKPOINT_PATH" ]; then
-    echo "ERROR: --checkpoint_path is required"
-    exit 1
+    # First, map HEMISPHERE to the correct name for checkpoint search
+    if [[ "${HEMISPHERE,,}" == "lh" ]]; then
+        HEMI_CHECK="Left"
+    elif [[ "${HEMISPHERE,,}" == "rh" ]]; then
+        HEMI_CHECK="Right"
+    else
+        HEMI_CHECK="${HEMISPHERE}"
+    fi
+
+    # Compose directory and filename patterns
+    if [[ "${MYELINATION,,}" == "true" || "${MYELINATION}" == "True" || "${MYELINATION}" == "1" ]]; then
+        NO_MYELIN_SUFFIX=""
+    else
+        NO_MYELIN_SUFFIX="_noMyelin"
+    fi
+
+    # Convert to short name for prediction if needed
+    if [[ "${PREDICTION}" == "eccentricity" ]]; then
+        PRED_SHORT="ecc"
+    elif [[ "${PREDICTION}" == "polarAngle" ]]; then
+        PRED_SHORT="PA"
+    elif [[ "${PREDICTION}" == "pRFsize" ]]; then
+        PRED_SHORT="size"
+    else
+        PRED_SHORT="${PREDICTION}"
+    fi
+
+    # Compose seed suffix for checkpoint search pattern
+    # If seed is provided, add _seed{SEED} suffix (matching train_unified.py convention)
+    if [ ! -z "$SEED" ]; then
+        SEED_SUFFIX="_seed${SEED}"
+    else
+        SEED_SUFFIX=""
+    fi
+
+    # Compose possible checkpoint search pattern
+    DIRNAME="Models/output_wandb/${PREDICTION}_${HEMI_CHECK}_${MODEL_TYPE}${NO_MYELIN_SUFFIX}${SEED_SUFFIX}"
+    FILENAME="${PRED_SHORT}_${HEMI_CHECK}_${MODEL_TYPE}${NO_MYELIN_SUFFIX}${SEED_SUFFIX}_best_model_epoch*.pt"
+
+    CHECKPOINT_SEARCH="${DIRNAME}/${FILENAME}"
+
+    # Find the latest matching checkpoint file if exists
+    CHECKPOINT_PATH=$(ls -1 ${CHECKPOINT_SEARCH} 2>/dev/null | sort -V | tail -n 1)
+
+    if [[ -z "$CHECKPOINT_PATH" ]]; then
+        echo "ERROR: No checkpoint file found with pattern: ${CHECKPOINT_SEARCH}"
+        echo "Please provide --checkpoint_path or ensure checkpoint exists in the expected location."
+        exit 1
+    fi
+    echo "INFO: Automatically found checkpoint: $CHECKPOINT_PATH"
 fi
 
 if [ "$SKIP_PREPROCESSING" = false ] && [ -z "$HCP_SURFACE_DIR" ]; then
@@ -276,9 +397,12 @@ to_rel_path() {
 declare -a EXTERNAL_MOUNTS=()
 
 # Helper function to add external mount if path is outside PROJECT_ROOT
-add_external_mount() {
+# This function modifies EXTERNAL_MOUNTS array and prints the container path to stdout
+# Usage: container_path=$(add_external_mount_get_path "$abs_path" "$mount_name" "$mount_as_dir")
+add_external_mount_get_path() {
     local abs_path="$1"
     local mount_name="$2"  # e.g., "freesurfer", "t1", "t2"
+    local mount_as_dir="${3:-auto}"  # "auto", "true", or "false"
     
     if [ -z "$abs_path" ]; then
         return 1
@@ -290,35 +414,145 @@ add_external_mount() {
     
     # If path is outside PROJECT_ROOT, add to mounts
     if [[ "$abs_path" != "$project_root_abs"* ]]; then
-        # Get parent directory for mounting
-        local parent_dir=$(dirname "$abs_path")
         local container_mount="/mnt/external_${mount_name}"
         
-        # Check if this mount already exists (avoid duplicates)
-        local mount_exists=false
-        for existing_mount in "${EXTERNAL_MOUNTS[@]}"; do
-            if [[ "$existing_mount" == "$parent_dir:"* ]]; then
-                # Extract container path from existing mount
-                local existing_container="${existing_mount#*:}"
-                container_mount="$existing_container"
-                mount_exists=true
-                break
+        # Determine if we should mount the directory itself or its parent
+        local should_mount_dir=false
+        if [ "$mount_as_dir" = "true" ]; then
+            should_mount_dir=true
+        elif [ "$mount_as_dir" = "auto" ]; then
+            # Auto-detect: if path is a directory, mount it directly
+            if [ -d "$abs_path" ]; then
+                should_mount_dir=true
             fi
-        done
-        
-        # Add mount if it doesn't exist
-        if [ "$mount_exists" = false ]; then
-            EXTERNAL_MOUNTS+=("$parent_dir:$container_mount")
         fi
         
-        echo "$container_mount/$(basename "$abs_path")"
+        if [ "$should_mount_dir" = true ]; then
+            # Mount the directory itself directly
+            # Check if this mount already exists (avoid duplicates)
+            local mount_exists=false
+            for existing_mount in "${EXTERNAL_MOUNTS[@]}"; do
+                if [[ "$existing_mount" == "$abs_path:"* ]]; then
+                    # Extract container path from existing mount
+                    local existing_container="${existing_mount#*:}"
+                    container_mount="$existing_container"
+                    mount_exists=true
+                    break
+                fi
+            done
+            
+            # Add mount if it doesn't exist (must be done before echo to ensure it persists)
+            if [ "$mount_exists" = false ]; then
+                EXTERNAL_MOUNTS+=("$abs_path:$container_mount")
+            fi
+            
+            echo "$container_mount"
+        else
+            # Mount parent directory (for files)
+            local parent_dir=$(dirname "$abs_path")
+            
+            # Check if this mount already exists (avoid duplicates)
+            local mount_exists=false
+            for existing_mount in "${EXTERNAL_MOUNTS[@]}"; do
+                if [[ "$existing_mount" == "$parent_dir:"* ]]; then
+                    # Extract container path from existing mount
+                    local existing_container="${existing_mount#*:}"
+                    container_mount="$existing_container"
+                    mount_exists=true
+                    break
+                fi
+            done
+            
+            # Add mount if it doesn't exist (must be done before echo to ensure it persists)
+            if [ "$mount_exists" = false ]; then
+                EXTERNAL_MOUNTS+=("$parent_dir:$container_mount")
+            fi
+            
+            echo "$container_mount/$(basename "$abs_path")"
+        fi
+        return 0
+    fi
+    return 1
+}
+
+# Wrapper that directly adds external mount and sets a variable
+# Usage: add_external_mount "$abs_path" "$mount_name" "result_var" "$mount_as_dir"
+add_external_mount() {
+    local abs_path="$1"
+    local mount_name="$2"
+    local result_var="$3"
+    local mount_as_dir="${4:-auto}"
+    
+    if [ -z "$abs_path" ]; then
+        return 1
+    fi
+    
+    local project_root_abs=$(to_abs_path "$PROJECT_ROOT")
+    project_root_abs="${project_root_abs%/}"
+    abs_path="${abs_path%/}"
+    
+    # If path is outside PROJECT_ROOT, add to mounts
+    if [[ "$abs_path" != "$project_root_abs"* ]]; then
+        local container_mount="/mnt/external_${mount_name}"
+        
+        # Determine if we should mount the directory itself or its parent
+        local should_mount_dir=false
+        if [ "$mount_as_dir" = "true" ]; then
+            should_mount_dir=true
+        elif [ "$mount_as_dir" = "auto" ]; then
+            if [ -d "$abs_path" ]; then
+                should_mount_dir=true
+            fi
+        fi
+        
+        if [ "$should_mount_dir" = true ]; then
+            # Mount the directory itself directly
+            local mount_exists=false
+            for existing_mount in "${EXTERNAL_MOUNTS[@]}"; do
+                if [[ "$existing_mount" == "$abs_path:"* ]]; then
+                    local existing_container="${existing_mount#*:}"
+                    container_mount="$existing_container"
+                    mount_exists=true
+                    break
+                fi
+            done
+            
+            if [ "$mount_exists" = false ]; then
+                EXTERNAL_MOUNTS+=("$abs_path:$container_mount")
+            fi
+            
+            eval "$result_var=\"$container_mount\""
+        else
+            # Mount parent directory (for files)
+            local parent_dir=$(dirname "$abs_path")
+            
+            local mount_exists=false
+            for existing_mount in "${EXTERNAL_MOUNTS[@]}"; do
+                if [[ "$existing_mount" == "$parent_dir:"* ]]; then
+                    local existing_container="${existing_mount#*:}"
+                    container_mount="$existing_container"
+                    mount_exists=true
+                    break
+                fi
+            done
+            
+            if [ "$mount_exists" = false ]; then
+                EXTERNAL_MOUNTS+=("$parent_dir:$container_mount")
+            fi
+            
+            eval "$result_var=\"$container_mount/$(basename "$abs_path")\""
+        fi
         return 0
     fi
     return 1
 }
 
 # Convert FREESURFER_DIR
+# Strategy: If processing multiple subjects, mount the base directory once
+# and use relative paths for each subject
 FREESURFER_DIR_CONTAINER=""
+FREESURFER_BASE_MOUNT=""
+
 if [ ! -z "$FREESURFER_DIR" ]; then
     FREESURFER_DIR_ABS=$(to_abs_path "$FREESURFER_DIR")
     if [ -z "$FREESURFER_DIR_ABS" ] || [ ! -d "$FREESURFER_DIR_ABS" ]; then
@@ -327,15 +561,50 @@ if [ ! -z "$FREESURFER_DIR" ]; then
         exit 1
     fi
     FREESURFER_DIR_REL=$(to_rel_path "$FREESURFER_DIR_ABS")
+    
     if [[ "$FREESURFER_DIR_REL" == /* ]]; then
-        # Path is outside PROJECT_ROOT, add external mount
-        FREESURFER_DIR_CONTAINER=$(add_external_mount "$FREESURFER_DIR_ABS" "freesurfer")
-        if [ ! -z "$FREESURFER_DIR_CONTAINER" ]; then
-            echo "INFO: FreeSurfer directory is outside PROJECT_ROOT, will mount as: $FREESURFER_DIR_CONTAINER"
-            FREESURFER_DIR="$FREESURFER_DIR_CONTAINER"
+        # Path is outside PROJECT_ROOT
+        # Check if this is part of a base directory that should be mounted
+        
+        # Try to find a common base directory by going up the path
+        # Look for pattern: /path/to/base/sub-XXXXX/dt-neuro-freesurfer.*
+        FREESURFER_BASE_CANDIDATE=""
+        
+        # If path contains /sub-*/, extract the base directory
+        if [[ "$FREESURFER_DIR_ABS" =~ (.*/)(sub-[^/]+)(/.*) ]]; then
+            FREESURFER_BASE_CANDIDATE="${BASH_REMATCH[1]}"
+            FREESURFER_BASE_CANDIDATE="${FREESURFER_BASE_CANDIDATE%/}"  # Remove trailing slash
+            
+            echo "INFO: Detected FreeSurfer base directory: $FREESURFER_BASE_CANDIDATE"
+            echo "INFO: Will mount base directory to allow multiple subjects"
+            
+            # Mount the base directory
+            add_external_mount "$FREESURFER_BASE_CANDIDATE" "freesurfer_base" FREESURFER_BASE_MOUNT "auto"
+            
+            if [ ! -z "$FREESURFER_BASE_MOUNT" ]; then
+                # Calculate relative path from base to actual FreeSurfer directory
+                RELATIVE_FROM_BASE="${FREESURFER_DIR_ABS#$FREESURFER_BASE_CANDIDATE/}"
+                FREESURFER_DIR_CONTAINER="$FREESURFER_BASE_MOUNT/$RELATIVE_FROM_BASE"
+                
+                echo "INFO: Base directory mounted as: $FREESURFER_BASE_MOUNT"
+                echo "INFO: Subject directory will be: $FREESURFER_DIR_CONTAINER"
+                
+                FREESURFER_DIR="$FREESURFER_DIR_CONTAINER"
+            else
+                echo "ERROR: Failed to set up external mount for FreeSurfer base directory"
+                exit 1
+            fi
         else
-            echo "ERROR: Failed to set up external mount for FreeSurfer directory"
-            exit 1
+            # Fallback: mount individual directory
+            echo "INFO: Could not detect base directory pattern, mounting individual FreeSurfer directory"
+            add_external_mount "$FREESURFER_DIR_ABS" "freesurfer" FREESURFER_DIR_CONTAINER "auto"
+            if [ ! -z "$FREESURFER_DIR_CONTAINER" ]; then
+                echo "INFO: FreeSurfer directory mounted as: $FREESURFER_DIR_CONTAINER"
+                FREESURFER_DIR="$FREESURFER_DIR_CONTAINER"
+            else
+                echo "ERROR: Failed to set up external mount for FreeSurfer directory"
+                exit 1
+            fi
         fi
     else
         # Path is inside PROJECT_ROOT, use relative path
@@ -357,7 +626,7 @@ if [ ! -z "$CHECKPOINT_PATH" ]; then
     if [[ "$CHECKPOINT_PATH_REL" == /* ]]; then
         # Checkpoint outside PROJECT_ROOT - use add_external_mount with file path
         # It will mount the parent directory and return the container path
-        CHECKPOINT_PATH_CONTAINER=$(add_external_mount "$CHECKPOINT_PATH_ABS" "checkpoint")
+        add_external_mount "$CHECKPOINT_PATH_ABS" "checkpoint" CHECKPOINT_PATH_CONTAINER "false"
         if [ ! -z "$CHECKPOINT_PATH_CONTAINER" ]; then
             echo "INFO: Checkpoint is outside PROJECT_ROOT, will mount as: $CHECKPOINT_PATH_CONTAINER"
             CHECKPOINT_PATH="$CHECKPOINT_PATH_CONTAINER"
@@ -383,7 +652,7 @@ if [ ! -z "$HCP_SURFACE_DIR" ]; then
     HCP_SURFACE_DIR_REL=$(to_rel_path "$HCP_SURFACE_DIR_ABS")
     if [[ "$HCP_SURFACE_DIR_REL" == /* ]]; then
         # Path is outside PROJECT_ROOT, add external mount
-        HCP_SURFACE_DIR_CONTAINER=$(add_external_mount "$HCP_SURFACE_DIR_ABS" "hcp_surface")
+        add_external_mount "$HCP_SURFACE_DIR_ABS" "hcp_surface" HCP_SURFACE_DIR_CONTAINER "auto"
         if [ ! -z "$HCP_SURFACE_DIR_CONTAINER" ]; then
             echo "INFO: HCP surface directory is outside PROJECT_ROOT, will mount as: $HCP_SURFACE_DIR_CONTAINER"
             HCP_SURFACE_DIR="$HCP_SURFACE_DIR_CONTAINER"
@@ -407,7 +676,7 @@ if [ ! -z "$T1_PATH" ]; then
         T1_PATH_REL=$(to_rel_path "$T1_PATH_ABS")
         if [[ "$T1_PATH_REL" == /* ]]; then
             # Path is outside PROJECT_ROOT, add external mount
-            T1_PATH_CONTAINER=$(add_external_mount "$T1_PATH_ABS" "t1")
+            add_external_mount "$T1_PATH_ABS" "t1" T1_PATH_CONTAINER "false"
             if [ ! -z "$T1_PATH_CONTAINER" ]; then
                 echo "INFO: T1 path is outside PROJECT_ROOT, will mount as: $T1_PATH_CONTAINER"
                 T1_PATH="$T1_PATH_CONTAINER"
@@ -431,7 +700,7 @@ if [ ! -z "$T2_PATH" ]; then
         T2_PATH_REL=$(to_rel_path "$T2_PATH_ABS")
         if [[ "$T2_PATH_REL" == /* ]]; then
             # Path is outside PROJECT_ROOT, add external mount
-            T2_PATH_CONTAINER=$(add_external_mount "$T2_PATH_ABS" "t2")
+            add_external_mount "$T2_PATH_ABS" "t2" T2_PATH_CONTAINER "false"
             if [ ! -z "$T2_PATH_CONTAINER" ]; then
                 echo "INFO: T2 path is outside PROJECT_ROOT, will mount as: $T2_PATH_CONTAINER"
                 T2_PATH="$T2_PATH_CONTAINER"
@@ -456,7 +725,7 @@ if [ ! -z "$OUTPUT_DIR" ]; then
     OUTPUT_DIR_REL=$(to_rel_path "$OUTPUT_DIR_ABS")
     if [[ "$OUTPUT_DIR_REL" == /* ]]; then
         # Path is outside PROJECT_ROOT, add external mount
-        OUTPUT_DIR_CONTAINER=$(add_external_mount "$OUTPUT_DIR_ABS" "output")
+        add_external_mount "$OUTPUT_DIR_ABS" "output" OUTPUT_DIR_CONTAINER "auto"
         if [ ! -z "$OUTPUT_DIR_CONTAINER" ]; then
             echo "INFO: Output directory is outside PROJECT_ROOT, will mount as: $OUTPUT_DIR_CONTAINER"
             OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"
@@ -490,19 +759,66 @@ fi
 CONTAINER_RUNNING=false
 NEED_NEW_CONTAINER=false
 
-if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+if [ "$FORCE_RECREATE_CONTAINER" = true ]; then
+    # Force recreation was requested
+    if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        echo "Force recreation requested. Stopping running container '$CONTAINER_NAME'..."
+        docker stop "$CONTAINER_NAME" > /dev/null 2>&1
+        docker rm "$CONTAINER_NAME" > /dev/null 2>&1
+    elif docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        echo "Force recreation requested. Removing existing container '$CONTAINER_NAME'..."
+        docker rm -f "$CONTAINER_NAME" > /dev/null 2>&1
+    fi
+    NEED_NEW_CONTAINER=true
+elif docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     # Container is running - check if it has the required mounts
     if [ ${#EXTERNAL_MOUNTS[@]} -gt 0 ]; then
-        echo "WARNING: Container '$CONTAINER_NAME' is already running, but external mounts may be needed."
-        echo "  If you encounter path errors, stop and remove the container, then rerun this script."
-        echo "  Run: docker stop $CONTAINER_NAME && docker rm $CONTAINER_NAME"
+        # Verify all required mounts match the actual container mounts
+        MOUNTS_OK=true
+        for mount in "${EXTERNAL_MOUNTS[@]}"; do
+            # Extract paths from mount (format: host_path:container_path)
+            host_path="${mount%%:*}"
+            container_path="${mount#*:}"
+            
+            # Get actual mount source for this container path
+            actual_source=$(docker inspect "$CONTAINER_NAME" --format='{{range .Mounts}}{{if eq .Destination "'"$container_path"'"}}{{.Source}}{{end}}{{end}}')
+            
+            # Normalize paths for comparison (remove trailing slashes)
+            host_path="${host_path%/}"
+            actual_source="${actual_source%/}"
+            
+            # Check if path exists and matches
+            if [ -z "$actual_source" ]; then
+                echo "Container mount for $container_path not found"
+                MOUNTS_OK=false
+                break
+            elif [ "$actual_source" != "$host_path" ]; then
+                echo "Container mount mismatch:"
+                echo "  Expected: $host_path -> $container_path"
+                echo "  Actual:   $actual_source -> $container_path"
+                MOUNTS_OK=false
+                break
+            fi
+        done
+        
+        if [ "$MOUNTS_OK" = false ]; then
+            echo "Container '$CONTAINER_NAME' has incorrect mounts."
+            echo "  Removing and recreating container with correct mounts..."
+            docker stop "$CONTAINER_NAME" > /dev/null 2>&1
+            docker rm "$CONTAINER_NAME" > /dev/null 2>&1
+            NEED_NEW_CONTAINER=true
+        else
+            CONTAINER_RUNNING=true
+            echo "Container '$CONTAINER_NAME' is already running with correct mounts. Using existing container."
+        fi
+    else
+        CONTAINER_RUNNING=true
+        echo "Container '$CONTAINER_NAME' is already running. Using existing container."
     fi
-    CONTAINER_RUNNING=true
-    echo "Container '$CONTAINER_NAME' is already running. Using existing container."
 elif docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     # Container exists but is stopped - check if we need to recreate for mounts
     if [ ${#EXTERNAL_MOUNTS[@]} -gt 0 ]; then
-        echo "WARNING: Container '$CONTAINER_NAME' exists but external mounts are needed."
+        echo "Container '$CONTAINER_NAME' exists but is stopped. External mounts needed."
         echo "  Removing existing container to recreate with proper mounts..."
         docker rm -f "$CONTAINER_NAME" > /dev/null 2>&1
         NEED_NEW_CONTAINER=true
@@ -527,10 +843,13 @@ if [ "$NEED_NEW_CONTAINER" = true ]; then
     DOCKER_CMD="$DOCKER_CMD -w /workspace"
     
     # Add external mounts if any
-    for mount in "${EXTERNAL_MOUNTS[@]}"; do
-        DOCKER_CMD="$DOCKER_CMD -v $mount"
-        echo "  Adding mount: $mount"
-    done
+    if [ ${#EXTERNAL_MOUNTS[@]} -gt 0 ]; then
+        echo "  Setting up external mounts:"
+        for mount in "${EXTERNAL_MOUNTS[@]}"; do
+            DOCKER_CMD="$DOCKER_CMD -v $mount"
+            echo "    - $mount"
+        done
+    fi
     
     # Pass Wandb API key as environment variable if provided
     if [ ! -z "$WANDB_API_KEY" ]; then
@@ -690,7 +1009,9 @@ if [ "$SKIP_PREPROCESSING" = false ]; then
     STEP1_CMD="$STEP1_CMD -s $FREESURFER_DIR_FOR_CMD"
     STEP1_CMD="$STEP1_CMD -t $HCP_SURFACE_DIR_FOR_CMD"
     STEP1_CMD="$STEP1_CMD -h $HEMISPHERE_SHORT"
+    STEP1_CMD="$STEP1_CMD -g $FAST_MODE"
     STEP1_CMD="$STEP1_CMD -j $N_JOBS"
+    STEP1_CMD="$STEP1_CMD -w $CALCULATE_CURV_USING_WB"
     
     # if [ ! -z "$SUBJECT_ID" ]; then
     #     STEP1_CMD="$STEP1_CMD" -i $SUBJECT_ID"
@@ -718,10 +1039,14 @@ if [ ! -z "$OUTPUT_DIR_FOR_CMD" ]; then
     STEP2_CMD="$STEP2_CMD --output_dir $OUTPUT_DIR_FOR_CMD"
 fi
 
+if [ ! -z "$SEED" ]; then
+    STEP2_CMD="$STEP2_CMD --seed $SEED"
+fi
+
 # Build pipeline commands - Step 3: Fsaverage to native conversion
 STEP3_CMD=""
 if [ "$SKIP_NATIVE_CONVERSION" = false ]; then
-    STEP3_CMD="cd run_from_freesurfer && ./2_fsaverage2native.sh"
+    STEP3_CMD="cd run_from_freesurfer && ./3_fsaverage2native.sh"
     STEP3_CMD="$STEP3_CMD -s $FREESURFER_DIR_FOR_CMD"
     STEP3_CMD="$STEP3_CMD -t $HCP_SURFACE_DIR_FOR_CMD"
     STEP3_CMD="$STEP3_CMD -h $HEMISPHERE_SHORT"
@@ -729,6 +1054,11 @@ if [ "$SKIP_NATIVE_CONVERSION" = false ]; then
     STEP3_CMD="$STEP3_CMD -m $MODEL_TYPE"
     STEP3_CMD="$STEP3_CMD -y $MYELINATION"
     STEP3_CMD="$STEP3_CMD -j $N_JOBS"
+    
+    # Add seed parameter if provided
+    if [ ! -z "$SEED" ]; then
+        STEP3_CMD="$STEP3_CMD -e $SEED"
+    fi
     
     # if [ ! -z "$SUBJECT_ID" ]; then
     #     STEP3_CMD="$STEP3_CMD -i $SUBJECT_ID"
@@ -765,6 +1095,9 @@ echo "  Hemisphere: $HEMISPHERE"
 echo "  Model Type: $MODEL_TYPE"
 echo "  Prediction: $PREDICTION"
 echo "  Myelination: $MYELINATION"
+if [ ! -z "$SEED" ]; then
+    echo "  Seed: $SEED"
+fi
 if [[ "$CHECKPOINT_PATH" == /* ]]; then
     echo "  Checkpoint: $CHECKPOINT_PATH (external mount)"
 else

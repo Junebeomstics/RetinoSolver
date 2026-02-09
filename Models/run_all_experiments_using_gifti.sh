@@ -24,7 +24,7 @@ WEIGHT_DECAY=0  # No weight decay for baseline (matching deepRetinotopy_PA_LH.py
 INTERM_SAVE_EVERY=25
 BATCH_SIZE=1
 N_EXAMPLES=181
-OUTPUT_DIR="./output_wandb"
+OUTPUT_DIR="./output_from_fs_curv"
 
 # Parameters for transolver_optionC (from run_transolver_optionC.sh)
 N_EPOCHS_OPTIONC=500
@@ -64,19 +64,19 @@ R2_SCALING=${R2_SCALING:-"true"}  # Set to "true" to use R2 scaling in loss, "fa
 # NEPTUNE_API_TOKEN="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI4ZWNlMzk4Ny1hOTVlLTRjMzgtOWI4ZS1hY2FkYTY4MzNhYzMifQ=="  # Set your API token or use environment variable
 
 # Predictions to run
-PREDICTIONS=("polarAngle" "eccentricity" "pRFsize") #"polarAngle") # "pRFsize" "polarAngle" "pRFsize") # "eccentricity" "polarAngle" "pRFsize"
+PREDICTIONS=("pRFsize") #"polarAngle") # "pRFsize" "polarAngle" "pRFsize") # "eccentricity" "polarAngle" "pRFsize"
 
 # Hemispheres to run
-HEMISPHERES=("Left" "Right") # "Right" 
+HEMISPHERES=("Right") # "Right") # "Right" 
 
 # Model types to run
-MODEL_TYPES=("baseline" "transolver_optionA" "transolver_optionC") # "baseline" "transolver_optionA" "transolver_optionC")  #" "transolver_optionB") # ) # "transolver_optionA"  "transolver_optionB" "baseline"
+MODEL_TYPES=("transolver_optionC") # "transolver_optionA" "transolver_optionC") # "baseline" "transolver_optionA" "transolver_optionC")  #" "transolver_optionB") # ) # "transolver_optionA"  "transolver_optionB" "baseline"
 
 # Myelination to run
 USE_MYELINATION="False"
 
 # Seeds to run (for subject splitting)
-SEEDS=(0 1 2)  # Run experiments with seeds 0, 1, 2. Set to (0) to run only seed 0, or () to use default seed=1
+SEEDS=(2)  # Run experiments with seeds 0, 1, 2. Set to (0) to run only seed 0, or () to use default seed=1
 
 # Check if Docker is available
 if ! command -v docker &> /dev/null; then
@@ -304,7 +304,8 @@ run_experiment() {
             --n_examples $N_EXAMPLES \
             --output_dir $OUTPUT_DIR \
             --myelination $USE_MYELINATION \
-            --r2_scaling $R2_SCALING"
+            --r2_scaling $R2_SCALING \
+            --use_freesurfer_curv True"
         
         # Add seed parameter if provided
         if [ ! -z "$seed" ]; then
@@ -339,7 +340,8 @@ run_experiment() {
             --n_examples $N_EXAMPLES \
             --output_dir $OUTPUT_DIR \
             --myelination $USE_MYELINATION \
-            --r2_scaling $R2_SCALING"
+            --r2_scaling $R2_SCALING \
+            --use_freesurfer_curv True"
         
         # Add seed parameter if provided
         if [ ! -z "$seed" ]; then

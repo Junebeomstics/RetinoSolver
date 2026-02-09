@@ -102,6 +102,8 @@ def main():
                         help='Whether myelination was used during training (default: True)')
     parser.add_argument('--output_dir', type=str, default=None,
                         help='Output directory for predictions. If None, saves in FreeSurfer directory structure.')
+    parser.add_argument('--seed', type=str, default=None,
+                        help='Seed number. If provided, results will be saved in deepRetinotopy/seed{seed}/ subfolder.')
     parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size for inference')
     
@@ -255,9 +257,15 @@ def main():
             
             # Determine output directory
             if args.output_dir:
-                output_dir = osp.join(args.output_dir, subject_id, 'deepRetinotopy')
+                base_output_dir = osp.join(args.output_dir, subject_id, 'deepRetinotopy')
             else:
-                output_dir = osp.join(args.freesurfer_dir, subject_id, 'deepRetinotopy')
+                base_output_dir = osp.join(args.freesurfer_dir, subject_id, 'deepRetinotopy')
+            
+            # Add seed subfolder if seed is provided
+            if args.seed:
+                output_dir = osp.join(base_output_dir, f'seed{args.seed}')
+            else:
+                output_dir = base_output_dir
             
             os.makedirs(output_dir, exist_ok=True)
             
